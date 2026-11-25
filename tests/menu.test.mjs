@@ -131,8 +131,8 @@ function boardRig(options = {}) {
   return { board, toasts, frame, wait, click, drag, find };
 }
 
-test('availability: wah, overdrive, distortion, chorus and reverb are usable; the others wait for their sound', () => {
-  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['chorus', 'distortion', 'overdrive', 'reverb', 'wah']);
+test('availability: every pedal has sound now, so all six are usable', () => {
+  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['chorus', 'delay', 'distortion', 'overdrive', 'reverb', 'wah']);
 });
 
 test('availability: a dimmed pedal cannot be switched or turned; it says "coming soon"', () => {
@@ -156,12 +156,13 @@ test('availability: a dimmed pedal cannot be switched or turned; it says "coming
 });
 
 test('availability: keys 4–9 and W skip dimmed pedals; W switches the wah, whose strip shows in hand mode', () => {
-  const { board, toasts, frame } = boardRig();
+  const available = id => id !== 'delay';   // every pedal has sound now; dim one for this test
+  const { board, toasts, frame } = boardRig({ isAvailable: available });
   const order = board.model.pedalOrder();
   for (let i = 0; i < order.length; i++) {
     const before = board.model.isOn(order[i]);
     assert.equal(board.handleKey(String(4 + i), 'playing'), true);
-    assert.equal(board.model.isOn(order[i]), isPedalAvailable(order[i]) ? !before : before, order[i]);
+    assert.equal(board.model.isOn(order[i]), available(order[i]) ? !before : before, order[i]);
   }
   // The wah is available: W switches it between hand and auto (and the strip follows).
   board.model.toggle('wah', true);

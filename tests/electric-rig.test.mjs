@@ -77,7 +77,7 @@ test('mapping: drive knobs raise the rig drive monotonically; every number is fi
 });
 
 test('mapping: the post-effects pedals change nothing in the rig; wah, overdrive and distortion have DSP here', () => {
-  assert.deepEqual(PEDALS_WITH_SOUND.filter(id => !['chorus', 'delay', 'reverb'].includes(id)), ['wah', 'overdrive', 'distortion']);
+  assert.deepEqual(PEDALS_WITH_SOUND, ['wah', 'overdrive', 'distortion', 'chorus', 'delay', 'reverb']);
   const model = createPedalModel();
   model.applyPreset('rock');
   const base = JSON.stringify(rigFromSnapshot(model.snapshot()));

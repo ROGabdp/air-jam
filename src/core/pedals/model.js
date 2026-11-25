@@ -5,6 +5,7 @@
 
 import { WAH_RANGES, WAH_DEFAULT_KNOBS } from '../audio/wah.js';
 import { CHORUS_RANGES, CHORUS_DEFAULT_KNOBS } from '../audio/post-fx/chorus.js';
+import { DELAY_RANGES, DELAY_DEFAULT_KNOBS } from '../audio/post-fx/delay.js';
 import { REVERB_SIZES, REVERB_RANGES, REVERB_DEFAULT_KNOBS } from '../audio/post-fx/reverb.js';
 
 const clamp01 = v => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
@@ -16,9 +17,9 @@ export const STANDARD_ORDER = ['wah', 'overdrive', 'distortion', AMP, 'chorus', 
 export const PEDAL_IDS = STANDARD_ORDER.filter(id => id !== AMP);
 export const MODES = ['simple', 'advanced'];
 export const MAX_SIMPLE_KNOBS = 2;
-// Pedals whose sound (DSP) exists. The others are kept in the model and drawn, but make no sound yet
-// (owner decision: staged later); snapshots carry `sound: false` for them so a view can say so.
-export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion', 'chorus', 'reverb'];
+// Pedals whose sound (DSP) exists: all six now. A pedal added later without DSP stays in the model and
+// is drawn but silent; snapshots carry `sound: false` for it so a view can say so.
+export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion', 'chorus', 'delay', 'reverb'];
 
 const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 'dB', default: 0.67, simple: false };
 
@@ -78,12 +79,20 @@ export const PEDAL_TYPES = {
       { ...level, default: CHORUS_DEFAULT_KNOBS.level },
     ],
   },
+  // Delay (src/core/audio/post-fx/delay.js): the time follows the song's pulse by itself. Simple:
+  // 回音量 (wet mix) and 重複 (feedback); advanced adds 跟拍子／自由, 拍長 (短 ×½ / 中 / 長 ×2 of the
+  // synced time), 自由 time, 音色 (loop low-pass), 來回 (ping-pong), 換和弦收 and level.
   delay: {
     label: 'pedal.delay', hue: 212, icon: 'delay',
     knobs: [
-      { id: 'time', label: 'pedal.knob.time', min: 0, max: 2, unit: '', default: 0.5, simple: true, steps: ['pedal.step.short', 'pedal.step.dotted', 'pedal.step.long'] },
-      { id: 'mix', label: 'pedal.knob.mix', min: 0, max: 40, unit: '%', default: 0.5, simple: true },
-      { id: 'feedback', label: 'pedal.knob.feedback', min: 0, max: 0.6, unit: '', default: 0.5, simple: false },
+      { id: 'mix', label: 'pedal.knob.echoLevel', min: DELAY_RANGES.mix[0], max: DELAY_RANGES.mix[1], unit: '%', default: DELAY_DEFAULT_KNOBS.mix, simple: true },
+      { id: 'feedback', label: 'pedal.knob.feedback', min: DELAY_RANGES.feedback[0], max: DELAY_RANGES.feedback[1], unit: '%', default: DELAY_DEFAULT_KNOBS.feedback, simple: true },
+      { id: 'sync', label: 'pedal.knob.delaySync', min: 0, max: 1, unit: '', default: DELAY_DEFAULT_KNOBS.sync, simple: false, toggle: true, steps: ['pedal.step.followBeat', 'pedal.step.freeTime'] },
+      { id: 'time', label: 'pedal.knob.delayTime', min: 0, max: 2, unit: '', default: DELAY_DEFAULT_KNOBS.time, simple: false, steps: ['pedal.step.short', 'pedal.step.medium', 'pedal.step.long'] },
+      { id: 'free', label: 'pedal.knob.freeTime', min: DELAY_RANGES.freeMs[0], max: DELAY_RANGES.freeMs[1], unit: 'ms', curve: 'log', default: DELAY_DEFAULT_KNOBS.free, simple: false },
+      { id: 'tone', label: 'pedal.knob.tone', min: DELAY_RANGES.toneHz[0], max: DELAY_RANGES.toneHz[1], unit: 'Hz', curve: 'log', default: DELAY_DEFAULT_KNOBS.tone, simple: false },
+      { id: 'pingpong', label: 'pedal.knob.pingpong', min: 0, max: 1, unit: '', default: DELAY_DEFAULT_KNOBS.pingpong, simple: false, toggle: true, steps: ['pedal.step.centre', 'pedal.step.pingpong'] },
+      { id: 'duck', label: 'pedal.knob.duck', min: DELAY_RANGES.duck[0], max: DELAY_RANGES.duck[1], unit: '%', default: DELAY_DEFAULT_KNOBS.duck, simple: false },
       level,
     ],
   },

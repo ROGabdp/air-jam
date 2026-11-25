@@ -3,7 +3,7 @@
 // they start and stop. It makes no sound; tests check what the engine asks Web Audio to do.
 
 class FakeParam {
-  constructor(context, value = 0) { this.context = context; this.value = value; this.calls = []; }
+  constructor(context, value = 0) { this.context = context; this.value = value; this.calls = []; this.outputs = new Set(); }
   setTargetAtTime(target, time, tau) { this.calls.push({ type: 'target', target, time, tau }); return this; }
   cancelScheduledValues(time) { this.calls.push({ type: 'cancel', time }); return this; }
   setValueAtTime(value, time) { this.calls.push({ type: 'set', value, time }); return this; }
@@ -54,6 +54,8 @@ export class FakeAudioContext {
     return n;
   }
   createDelay(maxDelayTime = 1) { const n = new FakeNode(this, 'delay', { delayTime: 0 }); n.maxDelayTime = maxDelayTime; return n; }
+  createChannelSplitter(outputs = 6) { const n = new FakeNode(this, 'splitter'); n.numberOfOutputs = outputs; return n; }
+  createChannelMerger(inputs = 6) { const n = new FakeNode(this, 'merger'); n.numberOfInputs = inputs; return n; }
   createConvolver() { const n = new FakeNode(this, 'convolver'); n.buffer = null; n.normalize = true; return n; }
   createConstantSource() {
     const n = new FakeNode(this, 'constant', { offset: 1 });
@@ -62,10 +64,13 @@ export class FakeAudioContext {
     n.stop = () => {};
     return n;
   }
-  // Oscillators (the metronome, LFOs) are not buffer sources: they are listed apart, so `sources` stays plucks.
+  // Oscillators (the metronome, LFOs) are plain nodes with frequency/detune params, not buffer sources:
+  // start() lists them in `oscillators`, so `sources` stays the voices' buffer sources (plucks).
   createOscillator() {
-    const n = new FakeBufferSource(this); n.kind = 'oscillator'; n.type = 'sine'; n.frequency = new FakeParam(this, 440);
+    const n = new FakeNode(this, 'oscillator', { frequency: 440, detune: 0 });
+    n.type = 'sine'; n.startedAt = null; n.stoppedAt = null;
     n.start = (when = 0) => { n.startedAt = when; this.oscillators.push(n); };
+    n.stop = (when = 0) => { n.stoppedAt = when; };
     return n;
   }
   createBufferSource() { return new FakeBufferSource(this); }

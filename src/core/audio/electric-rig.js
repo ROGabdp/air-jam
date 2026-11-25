@@ -16,8 +16,8 @@
 //       low restore) → level
 //
 // The wah's band-pass and compensation read the part's wah position signal (wah.js); its knobs
-// are stage numbers like any other. Chorus, delay and reverb have no sound yet (owner decision:
-// staged later); see PEDALS_WITH_SOUND in src/core/pedals/model.js.
+// are stage numbers like any other. Chorus, delay and reverb are not in this chain: they sit on the
+// part's post-effects bus after both takes (src/core/audio/post-fx/), so the rig ignores them.
 import { clipCurve, curveSlope, chokeDepthDb } from './distortion.js';
 import { driveDb, buildSwitchableStages } from './stages.js';
 import { wahSettings, wahCompensation } from './wah.js';

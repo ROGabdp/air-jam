@@ -1,8 +1,8 @@
 // The only place where the pedalboard meets sound. The audio engine's applyPedals(snapshot, change)
 // (src/core/audio/engine.js) moves the electric rig to the board's settings: knobs glide, switches
-// cross-fade between two copies of the chain, nothing is rebuilt while playing. Wah, overdrive and
-// distortion have sound (model.js PEDALS_WITH_SOUND; snapshot.pedals[id].sound); chorus, delay and
-// reverb are stored but silent. The wah's position (strip, strums, beat) moves its own signal in
+// cross-fade between two copies of the chain, nothing is rebuilt while playing. All six pedals have
+// sound (model.js PEDALS_WITH_SOUND; snapshot.pedals[id].sound): wah, overdrive and distortion in the
+// rig's chain; chorus, delay and reverb on the part's post-effects bus (src/core/audio/post-fx/). The wah's position (strip, strums, beat) moves its own signal in
 // the engine, not the chain (src/core/audio/wah.js). The game also calls applyPedals once when it
 // creates the engine (first user gesture), so settings made before that are heard.
 //
