@@ -127,6 +127,24 @@ export function createAudioEngine(settings) {
     };
   }
 
+  // Metronome tick at a song position (seconds), on the song's own clock so it lines up with what
+  // is heard. Used to check the detected beat by ear.
+  function click(songSeconds, accent = false) {
+    if (!song) return;
+    const when = song.startTime + songSeconds;
+    if (when < ctx.currentTime) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = accent ? 1760 : 1320;
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(accent ? 0.45 : 0.3, when + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.05);
+    osc.connect(gain).connect(limiter);
+    osc.start(when);
+    osc.stop(when + 0.06);
+    osc.onended = () => gain.disconnect();
+  }
+
   function stopSong() {
     if (!song) return;
     const { source } = song;
@@ -145,6 +163,7 @@ export function createAudioEngine(settings) {
     ringTime: freq => t60For(freq) / 4.5,
     playSong,
     stopSong,
+    click,
     get playing() { return song !== null; },
     songTime: () => (song ? ctx.currentTime - song.startTime : 0),
     now: () => ctx.currentTime,

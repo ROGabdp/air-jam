@@ -4,7 +4,7 @@ import { SETTINGS, SNAP_MODES } from '../settings.js';
 import { t, applyTranslations } from '../i18n/index.js';
 import { createAudioEngine, mixToMono } from '../core/audio/engine.js';
 import { TONES, TONE_ORDER } from '../core/audio/tones.js';
-import { analyzeAsync } from '../core/analysis/analysis.js';
+import { analyzeAsync, retime } from '../core/analysis/analysis.js';
 import { renderDemoSong, compareWithTruth } from '../core/song/demo-song.js';
 import { createSongMap } from '../core/game/song-map.js';
 import { createScorer } from '../core/game/scoring.js';
@@ -44,6 +44,7 @@ export function createApp() {
   let song = null;               // { title, buffer, analysis, map }
   let chord = null;
   let lastBeat = -1;
+  let clickedBeat = -1;
   let mouseMode = query.get('mouse') === '1';
   let camera = { status: 'off', tracker: null, token: 0 };   // off | starting | ready | failed
   let cameraHands = [];
@@ -181,7 +182,10 @@ export function createApp() {
   function refreshInfo() {
     if (!song) return;
     const parts = [song.title];
-    if (song.analysis) parts.push(t('hud.bpm', { bpm: Math.round(song.analysis.bpm) }));
+    if (song.analysis) {
+      const manual = song.analysis.manual.factor !== 1 || song.analysis.manual.shift !== 0;
+      parts.push(t(manual ? 'hud.bpmManual' : 'hud.bpm', { bpm: Math.round(song.analysis.bpm) }));
+    }
     parts.push(snapLabel(), t(`hud.tone.${settings.tone}`));
     hud.setSongInfo(parts.join('　·　'));
   }
@@ -266,7 +270,8 @@ export function createApp() {
     if (token !== loadToken) return;
 
     if (analysis) {
-      console.info(`[Air Jam] ${title}: ${analysis.bpm.toFixed(1)} BPM, key ${chordName(analysis.key)}, `
+      console.info(`[Air Jam] ${title}: ${analysis.bpm.toFixed(1)} BPM (pulse ${(1000 * analysis.pulse).toFixed(1)} ms × `
+        + `${analysis.autoTempo.grouping}, ${analysis.meter}), key ${chordName(analysis.key)}, `
         + `${analysis.segments.length} chord segments:`, analysis.segments.map(s => s.name).join(' '));
       if (truth) {
         const report = compareWithTruth(analysis, truth);
@@ -287,6 +292,7 @@ export function createApp() {
     audio.stopSong();
     scorer.reset();
     lastBeat = -1;
+    clickedBeat = -1;
     pitch.setKey(song.analysis?.key ?? null);
     chord = song.map ? song.map.chordAt(0) : null;
     pitch.setChord(chord);
@@ -298,6 +304,46 @@ export function createApp() {
     hud.setScore(0, 0);
     refreshInfo();
     setState('ready');
+  }
+
+  // Manual tempo correction: halve/double/×1.5/÷1.5 the beat or move it by one pulse. The analysis
+  // keeps its spectral features, so only the beat grid, bars and chords are re-derived.
+  function adjustTempo(change) {
+    if (!song?.analysis || (state !== 'ready' && state !== 'playing')) return;
+    const { factor, shift } = song.analysis.manual;
+    const next = change === 'reset' ? { factor: 1, shift: 0 }
+      : change.factor ? { factor: factor * change.factor, shift: 0 }
+        : { factor, shift: shift + change.shift };
+    let analysis;
+    try {
+      analysis = retime(song.analysis, next);
+    } catch (error) {
+      console.warn('[Air Jam] tempo change failed:', error);
+      hud.toast(t('tempo.failed'), 3);
+      return;
+    }
+    song.analysis = analysis;
+    song.map = createSongMap(analysis);
+    const heard = state === 'playing' ? Math.max(0, heardTime()) : 0;
+    lastBeat = state === 'playing' ? song.map.beatIndexAt(heard) : -1;
+    clickedBeat = state === 'playing' ? song.map.beatIndexAt(audio.songTime()) : -1;
+    scorer.state.lastScoredBeat = song.map.beatIndexAt(heard);
+    setChord(song.map.chordAt(heard + settings.chordLookahead / 1000));
+    hud.setNext(song.map.nextChord(heard));
+    refreshInfo();
+    const bpm = Math.round(analysis.bpm);
+    hud.toast(change === 'reset' ? t('tempo.toastReset', { bpm })
+      : change.factor ? t('tempo.toastBpm', { bpm })
+        : t(change.shift < 0 ? 'tempo.toastEarlier' : 'tempo.toastLater'), 2);
+    console.info(`[Air Jam] tempo ×${analysis.manual.factor.toFixed(3)}, shift ${analysis.manual.shift} pulse(s): `
+      + `${analysis.bpm.toFixed(1)} BPM, ${analysis.segments.length} chord segments:`, analysis.segments.map(s => s.name).join(' '));
+  }
+
+  function toggleMetronome() {
+    settings.metronome = !settings.metronome;
+    clickedBeat = song?.map && audio ? song.map.beatIndexAt(audio.songTime()) : -1;
+    hud.setMetronome(settings.metronome);
+    hud.toast(t(settings.metronome ? 'tempo.clickOn' : 'tempo.clickOff'), 1.5);
   }
 
   function beginSong() {
@@ -341,6 +387,14 @@ export function createApp() {
         hud.setBeat(beat.inBar);
       }
       scorer.tick(heard, song.map);
+      if (settings.metronome) {
+        // Schedule ticks a little ahead on the song clock (the song and the ticks share the output delay).
+        const now = audio.songTime();
+        for (let i = Math.max(clickedBeat + 1, song.map.beatIndexAt(now) + 1); i < song.map.beatCount && song.map.beatTime(i) <= now + 0.2; i++) {
+          audio.click(song.map.beatTime(i), song.analysis.beatInBar[i] === 0);
+          clickedBeat = i;
+        }
+      }
       hud.setNext(song.map.nextChord(heard));
       hud.setProgress(heard / song.map.duration);
     } else if (state === 'playing') {
@@ -377,12 +431,25 @@ export function createApp() {
   document.getElementById('startButton').addEventListener('click', beginSong);
   document.getElementById('againButton').addEventListener('click', () => { unlockAudio(); enterReady(); });
   document.getElementById('changeButton').addEventListener('click', backToIntro);
+  const TEMPO_ACTIONS = {
+    half: { factor: 0.5 }, double: { factor: 2 }, slower: { factor: 2 / 3 }, faster: { factor: 1.5 },
+    earlier: { shift: -1 }, later: { shift: 1 }, reset: 'reset',
+  };
+  for (const button of document.querySelectorAll('[data-tempo]')) {
+    button.addEventListener('click', () => {
+      if (button.dataset.tempo === 'click') toggleMetronome();
+      else adjustTempo(TEMPO_ACTIONS[button.dataset.tempo]);
+    });
+  }
+  const TEMPO_KEYS = { '[': 'half', ']': 'double', ';': 'slower', "'": 'faster', ',': 'earlier', '.': 'later', '0': 'reset' };
 
   window.addEventListener('keydown', event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toLowerCase();
     if (key === 'm') setMouseMode(!mouseMode);
     else if (key === 'h') settings.showHand = !settings.showHand;
+    else if (key === 'k') toggleMetronome();
+    else if (TEMPO_KEYS[key]) adjustTempo(TEMPO_ACTIONS[TEMPO_KEYS[key]]);
     else if (key === ' ' && state === 'ready') { event.preventDefault(); beginSong(); }
     else if (key === 'escape' && state === 'playing') finish();
     else if (key === 'escape' && state === 'ready') backToIntro();
@@ -402,6 +469,7 @@ export function createApp() {
 
   resize();
   refreshMode();
+  hud.setMetronome(settings.metronome);
   setState('intro');
   requestAnimationFrame(frame);
 

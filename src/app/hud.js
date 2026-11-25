@@ -18,7 +18,7 @@ export function createHud() {
     analyzeFill: $('analyzeFill'), analyzeText: $('analyzeText'),
     modeHint: $('modeHint'), introMessage: $('introMessage'),
     finalScore: $('finalScore'), statCombo: $('statCombo'), statPerfect: $('statPerfect'),
-    statGood: $('statGood'), endingSummary: $('endingSummary'),
+    statGood: $('statGood'), endingSummary: $('endingSummary'), metronome: $('metronomeButton'),
   };
   const shown = { score: -1, combo: -1, chord: undefined, next: undefined, beatsLeft: -1, beat: -1 };
   let toastTimer = 0;
@@ -41,7 +41,8 @@ export function createHud() {
 
     setModeHint(mouse) { setText(el.modeHint, t(mouse ? 'intro.modeMouse' : 'intro.modeCamera')); },
     setIntroMessage(text) { setText(el.introMessage, text); },
-    setHelp(mouse) { el.help.innerHTML = `${t(mouse ? 'help.mouse' : 'help.camera')}<br>${t('help.keys')}`; },
+    setHelp(mouse) { el.help.innerHTML = `${t(mouse ? 'help.mouse' : 'help.camera')}<br>${t('help.keys')}<br>${t('help.tempoKeys')}`; },
+    setMetronome(on) { el.metronome.classList.toggle('on', on); el.metronome.setAttribute('aria-pressed', String(on)); },
     setStatus(text) { setText(el.status, text); },
     setSongInfo(text) { setText(el.songInfo, text); },
 

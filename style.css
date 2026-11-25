@@ -129,7 +129,7 @@ html, body {
 
 #ready {
   position: fixed;
-  left: 50%; bottom: 64px;
+  left: 50%; bottom: 84px;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
@@ -142,6 +142,11 @@ html, body {
   padding: 16px 28px;
 }
 .ready-title { font-size: 20px; font-weight: 700; }
+.tempo { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; max-width: 640px; }
+.tempo-label { font-size: 13px; color: var(--dim); margin-right: 4px; }
+button.mini { font-size: 13px; font-weight: 600; padding: 5px 12px; }
+button.mini:hover { transform: none; }
+button.mini.on { color: #1a1330; background: #9fe8ff; border-color: #9fe8ff; }
 
 /* ---------- Overlays ---------- */
 .overlay {

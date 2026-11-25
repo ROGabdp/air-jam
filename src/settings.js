@@ -13,6 +13,7 @@ export const SETTINGS = {
   perfectWindow: 70,       // ms
   goodWindow: 150,         // ms
   showHand: true,
+  metronome: false,        // tick on every detected beat while playing (K), to check the tempo by ear
   videoDim: 0.4,
 
   tone: 'steel',
