@@ -20,9 +20,21 @@ export const ANALYSIS = {
   maxBpm: 180,
   tempoPrior: 110,
   bassMaxHz: 180,
+  // Pulse (tatum), see estimatePulse: periods from minPulse seconds to one beat at minBpm, scored
+  // over pulseCombSpan seconds of multiples; a period is split in 2 or 3 while the in-between
+  // positions keep pulseSubdivision of the on-grid autocorrelation.
+  minPulse: 0.11,
+  pulseCombSpan: 4,
+  pulseSubdivision: 0.3,
+  pulseRefineSpan: 12,
+  // Meter: triple grouping only when its evidence beats duple by this much.
+  meterMargin: 0.1,
   doubleTempoRatio: 0.5,
   doubleTempoMinSupport: 0.25,
   doubleTempoBassSupport: 0.3,
+  // Manual tempo correction stays inside this range.
+  manualMinBpm: 40,
+  manualMaxBpm: 320,
   tightness: 100,
   chordChangePenalty: 0.25,
   silenceRatio: 0.05,
@@ -81,55 +93,141 @@ function autocorrelation(env, maxLag) {
   return acf;
 }
 
-// Beat period in envelope frames, from the autocorrelation of the onset envelope.
-export function estimatePeriod(env, framesPerSecond, bassEnv = null) {
-  const n = env.length;
-  const minLag = Math.ceil(framesPerSecond * 60 / ANALYSIS.maxBpm);
-  const maxLag = Math.ceil(framesPerSecond * 60 / ANALYSIS.minBpm);
-  const acf = autocorrelation(env, maxLag * 4 + 8);
-  const prior = lag => {
-    const octaves = Math.log2(60 * framesPerSecond / lag / ANALYSIS.tempoPrior);
-    return Math.exp(-0.5 * (octaves / 0.9) ** 2);
-  };
-  const localMax = (center, reach) => {
-    let best = Math.round(center);
-    const lo = Math.max(2, Math.round(center) - reach), hi = Math.min(acf.length - 2, Math.round(center) + reach);
-    for (let l = lo; l <= hi; l++) if (acf[l] > acf[best]) best = l;
-    return best;
-  };
-  const refine = (center, reach) => {
-    const best = localMax(center, reach);
-    const a = acf[best - 1], b = acf[best], c = acf[best + 1];
-    const denom = a - 2 * b + c;
-    return best + (denom < 0 ? 0.5 * (a - c) / denom : 0);
+// Autocorrelation of the mean-removed series, normalised so lag 0 is 1 (−1..1, 0 = unrelated).
+function centredAcf(series, maxLag) {
+  const n = series.length;
+  let mean = 0;
+  for (let i = 0; i < n; i++) mean += series[i] / n;
+  const c = Float32Array.from(series, v => v - mean);
+  let energy = 0;
+  for (let i = 0; i < n; i++) energy += c[i] * c[i];
+  energy /= Math.max(1, n);
+  const acf = new Float32Array(maxLag + 1);
+  if (energy <= 1e-12) return acf;
+  acf[0] = 1;
+  for (let lag = 1; lag <= maxLag && lag < n; lag++) {
+    let sum = 0;
+    for (let i = 0; i + lag < n; i++) sum += c[i] * c[i + lag];
+    acf[lag] = sum / (n - lag) / energy;
+  }
+  return acf;
+}
+
+const acfLerp = (acf, lag) => {
+  const i = Math.floor(lag), f = lag - i;
+  return i + 1 < acf.length ? acf[i] * (1 - f) + acf[i + 1] * f : 0;
+};
+const acfNear = (acf, lag) => {
+  const i = Math.floor(lag);
+  return i + 1 < acf.length ? Math.max(acf[i], acf[i + 1]) : 0;
+};
+
+/**
+ * Pulse (tatum) period in envelope frames: the shortest regular inter-onset period, of which the
+ * beat will be a whole multiple.
+ *  1. Start from the period whose multiples line up best with the onsets: the highest mean
+ *     autocorrelation over its multiples ("comb"). This is often a beat or two beats.
+ *  2. Split it in two or three while the new in-between positions are also onsets: the mean
+ *     autocorrelation at the new positions must reach pulseSubdivision × that at the old ones.
+ *     A split into a wrong ratio (e.g. 1.5 pulses) puts half the new positions between notes.
+ *  3. Refine over a longer span of multiples.
+ */
+export function estimatePulse(env, framesPerSecond) {
+  const minLag = ANALYSIS.minPulse * framesPerSecond;
+  const maxLag = framesPerSecond * 60 / ANALYSIS.minBpm;
+  const span = ANALYSIS.pulseCombSpan * framesPerSecond;
+  const refineSpan = Math.min(ANALYSIS.pulseRefineSpan * framesPerSecond, env.length / 2);
+  const acf = centredAcf(env, Math.ceil(Math.max(span + maxLag, refineSpan)) + 2);
+  const comb = (lag, reach, value, keep = () => true) => {
+    const count = Math.max(2, Math.floor(reach / lag));
+    let sum = 0, used = 0;
+    for (let k = 1; k <= count; k++) if (keep(k)) { sum += value(acf, k * lag); used++; }
+    return used ? sum / used : 0;
   };
 
-  let bestLag = minLag, bestScore = -Infinity;
-  for (let lag = minLag; lag <= maxLag; lag++) {
-    const score = (acf[lag] + 0.5 * acf[lag * 2] + 0.33 * acf[lag * 3] + 0.25 * acf[lag * 4]) * prior(lag);
-    if (score > bestScore) { bestScore = score; bestLag = lag; }
+  let pulse = minLag, best = -Infinity;
+  for (let lag = minLag; lag <= maxLag; lag += 0.1) {
+    const score = comb(lag, span, acfNear);
+    if (score > best) { best = score; pulse = lag; }
   }
-  // Octave check. Kick/snare alternation makes the two-beat lag stronger than the beat lag, so the
-  // search above often lands on half tempo; eighth-note melodies or hi-hats pull the other way.
-  // Bass and kick rarely move faster than the beat, so the bass-band envelope arbitrates.
-  const halfLag = Math.round(bestLag / 2);
-  if (halfLag >= minLag) {
-    const candidate = localMax(halfLag, 1);
-    let bassSupport = null;
-    if (bassEnv) {
-      const bassAcf = autocorrelation(bassEnv, bestLag + 2);
-      const peak = lag => Math.max(bassAcf[lag - 1], bassAcf[lag], bassAcf[lag + 1]);
-      if (peak(bestLag) > 0.05) bassSupport = peak(candidate) / peak(bestLag);
+  for (;;) {
+    const on = comb(pulse, span, acfNear);
+    let split = 0, splitSupport = ANALYSIS.pulseSubdivision;
+    for (const d of [2, 3]) {
+      if (pulse / d < minLag || on <= 0.05) continue;
+      const support = comb(pulse / d, Math.max(span, 2 * pulse), acfNear, k => k % d !== 0) / on;
+      if (support > splitSupport) { split = d; splitSupport = support; }
     }
-    const support = acf[candidate] / acf[bestLag];
-    const faster = bassSupport === null
-      ? support * prior(candidate) > ANALYSIS.doubleTempoRatio * prior(bestLag)
-      : support > ANALYSIS.doubleTempoMinSupport && bassSupport > ANALYSIS.doubleTempoBassSupport;
-    if (faster) bestLag = candidate;
+    if (!split) break;
+    pulse /= split;
   }
-  let period = refine(bestLag, 3);
-  if (period * 4 + 4 < Math.min(n, acf.length - 2)) period = refine(period * 4, 3) / 4;
-  return period;
+  let refined = pulse, refinedScore = -Infinity;
+  for (let lag = pulse * 0.98; lag <= pulse * 1.02; lag += 0.005) {
+    const score = comb(lag, refineSpan, acfLerp);
+    if (score > refinedScore) { refinedScore = score; refined = lag; }
+  }
+  return refined;
+}
+
+/**
+ * How many pulses make a beat. Beats are always a whole number of pulses, so a beat can never fall
+ * between two notes (the old single-stage estimate could land on 1.5 or 4/3 pulses).
+ *  1. Meter: the onset strength sampled on the tracked pulses is correlated with itself at 2, 4
+ *     and 8 pulses (duple) and at 3 and 9 pulses (triple). Triple needs a clear lead.
+ *  2. Candidates: duple → 1, 2 or 4 pulses; triple → 1 or 3; only those inside minBpm..maxBpm.
+ *  3. The candidate with the best accent periodicity × tempo prior wins, then the octave check:
+ *     a twice-as-fast candidate takes over when the onsets and the bass/kick band both repeat at it.
+ * @returns {{ grouping: number, meter: 'duple'|'triple', evidence: object }}
+ */
+export function chooseGrouping(env, bassEnv, framesPerSecond, pulse) {
+  const pulses = trackBeats(env, pulse);
+  const sample = series => Float32Array.from(pulses, f =>
+    Math.max(series[Math.max(0, f - 1)], series[f], series[Math.min(series.length - 1, f + 1)]));
+  const accents = centredAcf(sample(env), 16);
+  const duple = (accents[2] + accents[4] + accents[8]) / 3;
+  const triple = (accents[3] + accents[9]) / 2;
+  const meter = triple > duple + ANALYSIS.meterMargin ? 'triple' : 'duple';
+  const bpmOf = g => 60 * framesPerSecond / (pulse * g);
+  const prior = g => Math.exp(-0.5 * (Math.log2(bpmOf(g) / ANALYSIS.tempoPrior) / 0.9) ** 2);
+  const inRange = g => bpmOf(g) >= ANALYSIS.minBpm && bpmOf(g) <= ANALYSIS.maxBpm;
+  let candidates = (meter === 'triple' ? [1, 3] : [1, 2, 4]).filter(inRange);
+  if (!candidates.length) candidates = [1, 2, 3, 4, 6, 8].filter(inRange);
+  if (!candidates.length) candidates = [1];
+
+  // Beat strength of a candidate: the plain (not mean-removed) onset autocorrelation at the beat
+  // and its multiples, times the tempo prior, as in the earlier single-stage estimate (Ellis 2007).
+  const maxLag = Math.ceil(pulse * Math.max(...candidates) * 4) + 3;
+  const acf = autocorrelation(env, maxLag);
+  const bassAcf = bassEnv ? autocorrelation(bassEnv, maxLag) : null;
+  const peak = (series, lag) => {
+    const i = Math.round(lag);
+    return Math.max(series[i - 1] ?? 0, series[i] ?? 0, series[i + 1] ?? 0);
+  };
+  const score = g => {
+    const lag = pulse * g;
+    return (peak(acf, lag) + 0.5 * peak(acf, 2 * lag) + 0.33 * peak(acf, 3 * lag) + 0.25 * peak(acf, 4 * lag)) * prior(g);
+  };
+  let grouping = candidates.reduce((a, b) => (score(b) > score(a) ? b : a));
+  // Octave check. Kick/snare alternation makes two beats look stronger than one, so the choice
+  // above often lands on half tempo; eighth-note parts pull the other way. Bass and kick rarely
+  // move faster than the beat, so the bass band arbitrates.
+  const faster = grouping / 2;
+  let support = null, bassSupport = null;
+  if (candidates.includes(faster)) {
+    support = peak(acf, pulse * faster) / peak(acf, pulse * grouping);
+    if (bassAcf && peak(bassAcf, pulse * grouping) > 0.05) bassSupport = peak(bassAcf, pulse * faster) / peak(bassAcf, pulse * grouping);
+    const take = bassSupport === null
+      ? support * prior(faster) > ANALYSIS.doubleTempoRatio * prior(grouping)
+      : support > ANALYSIS.doubleTempoMinSupport && bassSupport > ANALYSIS.doubleTempoBassSupport;
+    if (take) grouping = faster;
+  }
+  return {
+    grouping, meter,
+    evidence: {
+      duple, triple, candidates, support, bassSupport,
+      accents: Array.from(accents.slice(1, 13), v => +v.toFixed(2)),
+    },
+  };
 }
 
 // Dynamic-programming beat tracker (Ellis 2007): beats land on onsets while keeping a steady period.
@@ -283,39 +381,24 @@ export function estimateKey(totalChroma) {
   return best;
 }
 
-// Generator form: yields progress (0..1) and returns the analysis result.
-export function* analyzeSteps(samples, sampleRate) {
-  const duration = samples.length / sampleRate;
-  const decimation = decimateSteps(samples, sampleRate, ANALYSIS.rate);
-  let step;
-  while (!(step = decimation.next()).done) yield 0.04 * step.value;
-  const { samples: x, sampleRate: sr } = step.value;
-  yield 0.04;
-
-  const envSteps = onsetEnvelopes(x, sr);
-  while (!(step = envSteps.next()).done) yield 0.04 + 0.36 * step.value;
-  const { env, bassEnv } = step.value;
-
-  const framesPerSecond = sr / ANALYSIS.onsetHop;
-  const period = estimatePeriod(env, framesPerSecond, bassEnv);
-  yield 0.44;
-  const frameTime = f => (f * ANALYSIS.onsetHop + ANALYSIS.onsetSize * ANALYSIS.onsetCenter) / sr;
-  const beats = smoothBeats(trackBeats(env, period).map(frameTime));
+// Beat grid, bar phase, per-beat chords and segments for a given beat period (envelope frames).
+// `shift` moves the whole grid by that many seconds (manual phase correction).
+function buildGrid(features, { period, pulse, shift = 0 }) {
+  const { duration, env, onsetRate, chroma: frames, chromaRate } = features;
+  const frameTime = f => (f * ANALYSIS.onsetHop + ANALYSIS.onsetSize * ANALYSIS.onsetCenter) / onsetRate;
+  let beats = smoothBeats(trackBeats(env, period).map(frameTime)).map(time => time + shift);
   if (beats.length < 8) throw new Error('not enough beats');
   const bpm = 60 * (beats.length - 1) / (beats[beats.length - 1] - beats[0]);
-  yield 0.5;
 
   // Quiet intros and outros have no onsets; continue the grid at the same spacing.
+  beats = beats.filter(time => time >= 0 && time <= duration);
   const firstGap = beats[1] - beats[0];
   while (beats[0] - firstGap >= 0) beats.unshift(beats[0] - firstGap);
   const lastGap = beats[beats.length - 1] - beats[beats.length - 2];
   while (beats[beats.length - 1] + lastGap <= duration) beats.push(beats[beats.length - 1] + lastGap);
 
-  const chromaSteps = chromaFrames(x, sr);
-  while (!(step = chromaSteps.next()).done) yield 0.5 + 0.46 * step.value;
-  const frames = step.value;
-
   const n = beats.length;
+  const half = ANALYSIS.chromaSize / 2 / ANALYSIS.chromaHop;   // frame centre offset, in frames
   const beatChroma = [];
   const total = new Float32Array(12);
   const energy = new Float32Array(n);
@@ -324,9 +407,9 @@ export function* analyzeSteps(samples, sampleRate) {
     const start = beats[b];
     const end = b + 1 < n ? beats[b + 1] : duration;
     const chroma = new Float32Array(12);
-    const first = Math.max(0, Math.ceil((start * sr - ANALYSIS.chromaSize / 2) / ANALYSIS.chromaHop));
+    const first = Math.max(0, Math.ceil(start * chromaRate - half));
     for (let f = first; f < frames.length; f++) {
-      if ((f * ANALYSIS.chromaHop + ANALYSIS.chromaSize / 2) / sr >= end) break;
+      if ((f + half) / chromaRate >= end) break;
       for (let i = 0; i < 12; i++) chroma[i] += frames[f][i];
     }
     for (let i = 0; i < 12; i++) { total[i] += chroma[i]; energy[b] += chroma[i]; }
@@ -359,8 +442,79 @@ export function* analyzeSteps(samples, sampleRate) {
     else segments.push({ start: b === 0 ? 0 : beats[b], end, ...chords[b], name: chordName(chords[b]) });
   }
 
+  const framesPerSecond = onsetRate / ANALYSIS.onsetHop;
+  return {
+    duration, bpm, beats, beatInBar, chords, segments, key: estimateKey(total),
+    pulse: pulse / framesPerSecond,            // seconds
+    beatPulses: period / pulse,                // a whole number unless corrected by hand to a non-pulse ratio
+    barSeconds: 4 * 60 / bpm,
+  };
+}
+
+function attachFeatures(result, features, tempo, manual) {
+  // Non-enumerable so logging or serialising an analysis does not dump the raw features.
+  Object.defineProperty(result, 'features', { value: features, enumerable: false });
+  Object.defineProperty(result, 'autoTempo', { value: tempo, enumerable: false });
+  result.meter = tempo.meter;
+  result.manual = manual;
+  return result;
+}
+
+// Generator form: yields progress (0..1) and returns the analysis result.
+export function* analyzeSteps(samples, sampleRate) {
+  const duration = samples.length / sampleRate;
+  const decimation = decimateSteps(samples, sampleRate, ANALYSIS.rate);
+  let step;
+  while (!(step = decimation.next()).done) yield 0.04 * step.value;
+  const { samples: x, sampleRate: sr } = step.value;
+  yield 0.04;
+
+  const envSteps = onsetEnvelopes(x, sr);
+  while (!(step = envSteps.next()).done) yield 0.04 + 0.36 * step.value;
+  const { env, bassEnv } = step.value;
+
+  const chromaSteps = chromaFrames(x, sr);
+  while (!(step = chromaSteps.next()).done) yield 0.4 + 0.46 * step.value;
+  const chroma = step.value;
+
+  const framesPerSecond = sr / ANALYSIS.onsetHop;
+  const features = { duration, env, bassEnv, onsetRate: sr, chroma, chromaRate: sr / ANALYSIS.chromaHop };
+  const pulse = estimatePulse(env, framesPerSecond);
+  yield 0.9;
+  const { grouping, meter, evidence } = chooseGrouping(env, bassEnv, framesPerSecond, pulse);
+  const tempo = { pulse, grouping, meter, evidence };
+  yield 0.94;
+  const result = buildGrid(features, { period: pulse * grouping, pulse });
   yield 1;
-  return { duration, bpm, beats, beatInBar, chords, segments, key: estimateKey(total) };
+  return attachFeatures(result, features, tempo, { factor: 1, shift: 0 });
+}
+
+/**
+ * Re-derives the beat grid, bars, chords and segments of an analysis with a manual tempo
+ * correction, without decoding or re-running the spectral analysis.
+ * @param analysis a result of analyzeSteps/analyzeSync (or of an earlier retime)
+ * @param {{ factor?: number, shift?: number }} manual tempo multiplier relative to the automatic
+ *   result (2 = double, 0.5 = half, 1.5, 2/3 …) and phase shift in steps of one pulse (half a
+ *   beat when the beat is a single pulse)
+ */
+export function retime(analysis, { factor = 1, shift = 0 } = {}) {
+  const { features, autoTempo: tempo } = analysis;
+  if (!features) throw new Error('analysis has no features to retime');
+  const framesPerSecond = features.onsetRate / ANALYSIS.onsetHop;
+  const autoPeriod = tempo.pulse * tempo.grouping;
+  const bpmOf = period => 60 * framesPerSecond / period;
+  const autoBpm = bpmOf(autoPeriod);
+  factor = Math.max(ANALYSIS.manualMinBpm / autoBpm, Math.min(ANALYSIS.manualMaxBpm / autoBpm, factor));
+  const period = autoPeriod / factor;
+  // The pulse stays the detected one while the beat is a whole number of pulses; otherwise the
+  // correction overrides the pulse too and the beat is split in two. A phase shift moves the grid
+  // by one pulse, or by half a beat when the beat is a single pulse.
+  const ratio = period / tempo.pulse;
+  const whole = Math.round(ratio) >= 1 && Math.abs(ratio - Math.round(ratio)) < 0.05;
+  const pulse = whole ? tempo.pulse : period / 2;
+  const step = whole && Math.round(ratio) >= 2 ? pulse : period / 2;
+  const result = buildGrid(features, { period, pulse, shift: shift * step / framesPerSecond });
+  return attachFeatures(result, features, tempo, { factor, shift });
 }
 
 export function analyzeSync(samples, sampleRate) {

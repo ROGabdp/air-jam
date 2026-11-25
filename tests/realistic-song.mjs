@@ -42,7 +42,7 @@ export function parseRichChord(name) {
  * @param {number} [o.swing]         0 = straight eighths, 1 = full triplet swing
  * @param {number} [o.vocal]         vocal level relative to the guitar
  * @param {boolean} [o.drums]
- * @param {'strum'|'arpeggio'} [o.guitar]
+ * @param {'strum'|'arpeggio'|'chug'} [o.guitar]  chug: rock eighth-note power chords, bass doubling the root
  */
 export function renderBand({
   sampleRate = 44100, bars, bpm, endBpm = bpm, introBars = 1, swing = 0, vocal = 1,
@@ -129,6 +129,20 @@ export function renderBand({
     const inBar = b % 4;
     const notes = voicing(chord);
     // Bass: chord bass note (inversions included) on 1 and 3, a passing approach on 4&.
+    if (guitar === 'chug') {
+      // Rock rhythm section: root–fifth–octave power chord on every eighth (accented on the beat),
+      // bass doubling the root. The beat is two equal-looking pulses, which is what misleads a
+      // tempo estimate into 1.5- or 4/3-pulse beats.
+      const root = 40 + mod12(chord.bass - 4);
+      for (let half = 0; half < 2; half++) {
+        const start = eighth(b, half);
+        [root, root + 7, root + 12].forEach((midi, i) => pluck(midi, start + i * 0.004, half ? 0.4 : 0.5, 0.8, 0.6));
+        // A quiet third on top, as an open-voiced rhythm part or the bass player's fills would add.
+        pluck(root + 12 + mod12(chord.tones[1] - chord.bass), start + 0.012, 0.15, 0.7, 0.6);
+        pluck(bassNote(chord.bass), start, 0.5, 0.4, 0.5);
+      }
+      continue;
+    }
     if (inBar === 0 || inBar === 2 || chord !== chordAtBeat[b - 1]) {
       const bassMidi = bassNote(chord.bass);
       pluck(bassMidi, beatTimes[b], 0.55, 0.35, 1.4);

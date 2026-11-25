@@ -1,6 +1,6 @@
 // node tests/analysis.test.mjs [--verbose]
 // Synthesises backing tracks with known tempo/chords and checks what the analysis recovers.
-import { analyzeSync } from '../src/core/analysis/analysis.js';
+import { analyzeSync, retime } from '../src/core/analysis/analysis.js';
 import { renderBacking } from '../src/core/song/backing-synth.js';
 import { renderBand } from './realistic-song.mjs';
 import { DEMO, compareWithTruth } from '../src/core/song/demo-song.js';
@@ -76,6 +76,34 @@ CASES.push(
   },
 );
 
+// Rock rhythm section: power chords and bass on every eighth. The beat is two equal-looking pulses,
+// so a tempo estimate that is not tied to the pulse lands on 1.5 or 3 pulses (105 → 140 or 70,
+// 160 → 107); the real samples in samples/ did exactly that (tests/samples.test.mjs).
+const BLUES = [['A'], ['A'], ['A'], ['A'], ['D'], ['D'], ['A'], ['A'], ['E'], ['D'], ['A'], ['E']];
+const AM_ROCK = [['Am'], ['Am'], ['G'], ['G'], ['F'], ['G'], ['Am'], ['Am']];
+CASES.push(
+  {
+    name: 'rock: 12-bar blues 105, eighth chug, vocal',
+    render: () => renderBand({ bpm: 105, bars: [...BLUES, ...BLUES], guitar: 'chug', vocal: 0.6, seed: 6 }),
+    key: 'A', need: { bpm: 2, chords: 0.6, beats: 0.9 },
+  },
+  {
+    name: 'rock: 12-bar blues 140, eighth chug, vocal',
+    render: () => renderBand({ bpm: 140, bars: [...BLUES, ...BLUES], guitar: 'chug', vocal: 0.5, seed: 9 }),
+    key: 'A', need: { bpm: 3, chords: 0.45, beats: 0.9 },
+  },
+  {
+    name: 'rock: Am-G-F 160, eighth chug',
+    render: () => renderBand({ bpm: 160, bars: [...AM_ROCK, ...AM_ROCK, ...AM_ROCK], guitar: 'chug', vocal: 0, seed: 4 }),
+    key: 'Am', need: { bpm: 3, chords: 0.55, beats: 0.9 },
+  },
+  {
+    name: 'rock: Am-G-F 80, eighth chug',
+    render: () => renderBand({ bpm: 80, bars: [...AM_ROCK, ...AM_ROCK], guitar: 'chug', vocal: 0, seed: 4 }),
+    key: 'Am', need: { bpm: 2, octave: true, chords: 0.55, beats: 0.9 },
+  },
+);
+
 let failed = 0;
 const table = [];
 for (const test of CASES) {
@@ -106,5 +134,51 @@ for (const test of CASES) {
   if (verbose || !ok) console.table(result.rows);
 }
 console.table(table);
+
+// Manual tempo correction (retime): re-derives grid, bars and chords from the stored features.
+{
+  const { samples, sampleRate, truth } = renderBand({ bpm: 105, bars: [...BLUES, ...BLUES], guitar: 'chug', vocal: 0.6, seed: 6 });
+  const auto = analyzeSync(samples, sampleRate);
+  const pulse = 60 / 105 / 2;
+  const onPulse = beats => {
+    const inside = beats.filter(time => time > truth.beats[0] + 0.1 && time < truth.beats[truth.beats.length - 1]);
+    const near = inside.filter(time => {
+      const k = Math.round((time - truth.beats[0]) / pulse);
+      return Math.abs(time - truth.beats[0] - k * pulse) <= 0.04;
+    });
+    return near.length / inside.length;
+  };
+  const checks = [];
+  const check = (name, ok, detail) => { checks.push({ check: name, ok: ok ? 'PASS' : 'FAIL', detail }); if (!ok) failed++; };
+  const frozen = JSON.stringify(auto);
+  for (const [factor, bpm] of [[0.5, 52.5], [2, 210], [2 / 3, 70], [1.5, 157.5]]) {
+    const corrected = retime(auto, { factor });
+    const share = onPulse(corrected.beats);
+    // ×1.5 from two pulses is 4/3 pulse: deliberately off the pulse grid, only the tempo is checked.
+    const needGrid = factor !== 1.5;
+    check(`×${+factor.toFixed(3)} → ${bpm} BPM`, Math.abs(corrected.bpm - bpm) < bpm * 0.01 && (!needGrid || share >= 0.95),
+      `${corrected.bpm.toFixed(2)} BPM, ${(100 * share).toFixed(0)}% on pulse, ${corrected.segments.length} segments, bar ${corrected.barSeconds.toFixed(2)} s`);
+  }
+  const shifted = retime(auto, { shift: 1 });
+  const moved = shifted.beats.slice(4, -4).map(time => {
+    let best = Infinity;
+    for (const original of auto.beats) best = Math.min(best, Math.abs(time - original - pulse));
+    return best;
+  });
+  check('shift +1 pulse', moved.every(d => d < 0.03) && onPulse(shifted.beats) >= 0.95,
+    `max deviation from old beat + pulse ${(1000 * Math.max(...moved)).toFixed(1)} ms`);
+  // When the beat is a single pulse (the demo: no eighth notes), a shift is half a beat.
+  const demo = analyzeSync(renderBacking(DEMO).samples, renderBacking(DEMO).sampleRate);
+  const demoShifted = retime(demo, { shift: -1 });
+  const halfBeat = 30 / demo.bpm;
+  const demoMoved = demoShifted.beats.slice(4, -4).map(time => Math.min(...demo.beats.map(original => Math.abs(time - original + halfBeat))));
+  check('shift −1 on a one-pulse beat = half a beat earlier', demoMoved.every(d => d < 0.03),
+    `max deviation ${(1000 * Math.max(...demoMoved)).toFixed(1)} ms`);
+  const back = retime(retime(auto, { factor: 2, shift: 1 }), { factor: 1, shift: 0 });
+  check('reset returns the automatic grid', JSON.stringify({ ...back, manual: undefined }) === JSON.stringify({ ...auto, manual: undefined }), '');
+  check('retime does not modify its input', JSON.stringify(auto) === frozen, '');
+  console.table(checks);
+}
+
 if (failed) { console.error(`${failed} case(s) below threshold`); process.exit(1); }
 console.log('analysis tests passed');
