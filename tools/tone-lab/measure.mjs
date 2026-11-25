@@ -1,13 +1,17 @@
-// node tools/tone-lab/measure.mjs [--repeats 6] [--combo labC] [--seconds 16]
-// Offline measurements of the tone lab combos 甲乙丙丁 with the Node model (model.mjs), using the
-// challenge doc's metrics (docs/效果器_設計挑戰.md 4.3). Mix metrics use the owner's local songs
-// (samples/s14.wav, s21.wav, 10–26 s; git-ignored, never committed) when present, else the
-// built-in demo song. Prints one table per song plus the song-independent rows.
+// node tools/tone-lab/measure.mjs [--set rig|lab|all] [--repeats 6] [--combo labC] [--seconds 16]
+// Offline measurements with the Node model (model.mjs), using the challenge doc's metrics
+// (docs/效果器_設計挑戰.md 4.3) plus crunch indicators. --set rig (default): the game's electric rig
+// with the pedalboard presets 清音／微破／搖滾／重金屬 and both ends of the drive range (overdrive and
+// distortion on, knobs at 0 / at 1), next to 甲 and 丁 for reference; --set lab: 甲乙丙丁. Mix metrics
+// use the owner's local songs (samples/s14.wav, s21.wav, 10–26 s; git-ignored, never committed)
+// when present, else the built-in demo song.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SETTINGS } from '../../src/settings.js';
 import { LAB_COMBOS, LAB_ORDER, boosterStages } from '../../src/core/audio/tone-lab.js';
+import { rigFromSnapshot, rigStages, electricTone, rigDriveDb } from '../../src/core/audio/electric-rig.js';
+import { createPedalModel, PRESETS } from '../../src/core/pedals/model.js';
 import { renderDemoSong } from '../../src/core/song/demo-song.js';
 import { measureTone, TARGETS } from '../../src/lab/metrics.js';
 import { modelRenderer, seeded } from './model.mjs';
@@ -21,6 +25,7 @@ const option = (name, fallback) => {
 const repeats = Number(option('repeats', 6));
 const seconds = Number(option('seconds', 16));
 const only = option('combo', null);
+const set = option('set', 'rig');
 const SAMPLE_RATE = 44100;
 
 function readWavStereo(path) {
@@ -61,23 +66,47 @@ if (!songs.length) {
   songs.push({ name: 'demo', bpm: 100, section: section({ left: demo.samples, right: demo.samples, sampleRate: SAMPLE_RATE }, 10, seconds) });
 }
 
-const ids = only ? [only] : LAB_ORDER;
+// Candidates: lab combos by id, and rig settings as pedalboard snapshots.
+const CANDIDATES = {};
+for (const id of LAB_ORDER) CANDIDATES[id] = { name: `${LAB_COMBOS[id].letter} ${id}`, tone: LAB_COMBOS[id], booster: LAB_COMBOS[id].stages?.[0]?.type === 'lowshelf' ? boosterStages() : null };
+const presetLabel = { clean: '清音', crunch: '微破', rock: '搖滾', metal: '重金屬' };
+const rigCandidate = (key, name, snapshot) => {
+  const rig = rigFromSnapshot(snapshot);
+  const od = rigStages(rig)[0].branches[1];
+  CANDIDATES[key] = { name, tone: electricTone(rig), booster: rig.overdrive.on ? od.stages : null, rig };
+};
+for (const preset of PRESETS) {
+  const model = createPedalModel();
+  model.applyPreset(preset.id);
+  rigCandidate(preset.id, presetLabel[preset.id] ?? preset.id, model.snapshot());
+}
+for (const [key, name, value] of [['driveMin', 'drive min', 0], ['driveMax', 'drive max', 1]]) {
+  const model = createPedalModel();
+  model.applyPreset('rock');
+  model.setParam('overdrive', 'drive', value);
+  model.setParam('distortion', 'drive', value);
+  rigCandidate(key, name, model.snapshot());
+}
+const SETS = { rig: ['labA', 'labD', ...PRESETS.map(p => p.id), 'driveMin', 'driveMax'], lab: LAB_ORDER };
+SETS.all = [...new Set([...SETS.lab, ...SETS.rig])];
+
+const ids = only ? [only] : SETS[set] ?? SETS.rig;
 const results = {};
 const started = Date.now();
 for (const id of ids) {
-  const tone = LAB_COMBOS[id];
+  const { tone, booster } = CANDIDATES[id];
   results[id] = {};
   for (const song of songs) {
     results[id][song.name] = await measureTone({
       render: modelRenderer(SETTINGS, SAMPLE_RATE), tone, settings: SETTINGS, song: song.section,
-      repeats, mixSeconds: seconds, bpm: song.bpm, booster: tone.stages?.[0]?.type === 'lowshelf' ? boosterStages() : null,
+      repeats, mixSeconds: seconds, bpm: song.bpm, booster,
       random: seeded(7),
     });
   }
 }
 
 const f = (v, digits = 1) => (v === null || v === undefined || Number.isNaN(v) ? '–' : v.toFixed(digits));
-const name = id => `${LAB_COMBOS[id].letter} ${id}`;
+const name = id => CANDIDATES[id].name;
 const first = id => results[id][songs[0].name];
 const rows = [
   ['drive (dB, gains × clipper slopes)', '甲 24 → 乙 ~46', id => f(first(id).drive)],
@@ -91,6 +120,9 @@ const rows = [
   ['sustain, −10 / −20 dB points (s)', '1 bar: s21 2.29, s14 1.5', id => `${f(first(id).sustain, 2)} / ${f(first(id).sustain20, 2)}`],
   ['60–300 Hz share (%)', `≥ ${TARGETS.lowShare} if "thick"`, id => f(first(id).lowShare)],
   ['booster notch 100 Hz–5 kHz (dB)', `≤ ${TARGETS.boosterNotch}`, id => f(first(id).boosterNotch)],
+  ['crunch: distortion products, two-tone (dB)', 'higher = more broken', id => f(first(id).distortion)],
+  ['crunch: products above 1.5 kHz (dB)', 'higher = more fizz', id => f(first(id).fizz)],
+  ['voicing', '', id => (CANDIDATES[id].rig ? (CANDIDATES[id].rig.engaged ? 'power' : 'triad') : CANDIDATES[id].tone.voicing)],
 ];
 for (const song of songs) {
   rows.push([`[${song.name}] guitar vs song RMS (dB)`, '≈ 0 after matching', id => f(results[id][song.name].guitarVsSong)]);
@@ -104,7 +136,7 @@ const table = rows.map(([metric, target, value]) => {
   for (const id of ids) row[name(id)] = value(id);
   return row;
 });
-console.log(`Tone lab measurements (Node model, ${SAMPLE_RATE} Hz, ${repeats} repeats, mix ${seconds} s of ${songs.map(s => s.name).join(', ')} from 10 s; `
+console.log(`Electric tone measurements (Node model, ${SAMPLE_RATE} Hz, ${repeats} repeats, mix ${seconds} s of ${songs.map(s => s.name).join(', ')} from 10 s; `
   + `eighth notes at the song's tempo)`);
 console.table(table);
 console.log(`done in ${((Date.now() - started) / 1000).toFixed(1)} s. Model limits: no 4× oversampling; compressors approximate (see model.mjs).`);
