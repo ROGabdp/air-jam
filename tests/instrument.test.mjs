@@ -6,7 +6,10 @@ import { renderPluck } from '../src/core/audio/karplus.js';
 import { createGestureRecognizer } from '../src/core/hands/gestures.js';
 import { PluckDetector } from '../src/instruments/air-strings/pluck-detector.js';
 import { createPitchSnapper } from '../src/core/music/pitch-snap.js';
-import { chordPitchClasses, scalePitchClasses, parseChord, mod12, C_MAJOR_PENTATONIC } from '../src/core/music/theory.js';
+import { chordPitchClasses, scalePitchClasses, parseChord, mod12, C_MAJOR_PENTATONIC, chordName, noteToMidi } from '../src/core/music/theory.js';
+import { guardRoots, allowedRoots, powerChordAnalysis } from '../src/core/music/power-chords.js';
+import { distortionCurve, curveSlope, shapeSample, releaseTimeConstant, ceilingCurve } from '../src/core/audio/distortion.js';
+import { TONES, RHYTHM_DISTORTION } from '../src/core/audio/tones.js';
 import { createScorer } from '../src/core/game/scoring.js';
 import { createSongMap } from '../src/core/game/song-map.js';
 import { createAirStrings } from '../src/instruments/air-strings/index.js';
@@ -203,6 +206,136 @@ test('scale mode, free mode and the no-analysis fallback', () => {
   settings.snapMode = 'chord';
   snapper.setChord(parseChord('C'));
   for (let i = 0; i <= 20; i++) assert.ok([0, 7].includes(mod12(snapper.note(i / 20).midi)));
+});
+
+// ---------- rock chord mode: power chords, key guard, distortion, choke ----------
+test('power chords: only root and fifth, for all 24 detected chords and every slot, in a low register', () => {
+  const settings = { ...SETTINGS, snapMode: 'chord' };
+  const snapper = createPitchSnapper(settings);
+  snapper.setVoicing(TONES.electric.voicing);
+  const lowest = noteToMidi(settings.powerLowestNote);
+  let checked = 0, top = -Infinity;
+  for (let root = 0; root < 12; root++) for (const minor of [false, true]) {
+    // What the song map hands the snapper: the triad tracker's chord reduced to its root.
+    const detected = { root, minor };
+    const [power] = powerChordAnalysis({ beats: [0], chords: [detected], duration: 1, key: null }, { guard: false }).chords;
+    snapper.setChord(power);
+    assert.equal(chordName(power), `${chordName({ root, minor: false })}5`);
+    const allowed = [root, mod12(root + 7)];
+    let previous = -Infinity;
+    for (let i = 0; i <= 100; i++) {
+      const note = snapper.note(i / 100);
+      assert.ok(allowed.includes(mod12(note.midi)), `${chordName(detected)}: pitch class ${mod12(note.midi)}`);
+      assert.ok(note.midi >= previous, 'higher position never gives a lower note');
+      previous = note.midi;
+      checked++;
+    }
+    const bottom = snapper.note(0).midi;
+    assert.equal(mod12(bottom), root, 'the longest string plays the root');
+    assert.ok(bottom >= lowest && bottom < lowest + 12, 'roots sit in the bottom octave');
+    top = Math.max(top, snapper.note(1).midi);
+  }
+  assert.ok(top <= lowest + 11 + 12 * Math.floor((settings.powerSteps - 1) / 2) + ((settings.powerSteps - 1) % 2 ? 7 : 0), `top note ${top}`);
+  return `${checked} notes checked, highest midi ${top}`;
+});
+
+test('key guard: rock degrees kept, others held from the previous chord (synthetic progressions)', () => {
+  const roots = list => list.map(n => parseChord(n).root);
+  const names = rs => rs.map(r => chordName({ root: r, minor: false }));
+  const am = parseChord('Am'), a = parseChord('A'), c = parseChord('C');
+  assert.deepEqual(names(allowedRoots(am)), ['C', 'D', 'E', 'F', 'G', 'A']);
+  assert.deepEqual(names(allowedRoots(a)), ['C', 'D', 'E', 'F', 'F#', 'G', 'A', 'B']);
+  // Minor: i-bVII-bVI-V stays; a B (ii) and a C# (III) are held from the chord before.
+  let out = guardRoots(roots(['Am', 'G', 'F', 'Bm', 'E', 'C#m', 'Am']), am);
+  assert.deepEqual(names(out.roots), ['A', 'G', 'F', 'F', 'E', 'E', 'A']);
+  assert.equal(out.replaced, 2);
+  // Major: I-V-vi-IV and ii stay; iii (E in C) and a tritone root (F#) are held.
+  out = guardRoots(roots(['C', 'G', 'Am', 'F', 'Dm', 'Em', 'F#', 'C']), c);
+  assert.deepEqual(names(out.roots), ['C', 'G', 'A', 'F', 'D', 'D', 'D', 'C']);
+  // Blues-rock in A: A-D-E-G-C all stay.
+  out = guardRoots(roots(['A', 'D', 'E', 'G', 'C', 'A']), a);
+  assert.equal(out.replaced, 0);
+  // An out-of-key start takes the first in-key root; nothing in key at all gives the tonic.
+  assert.deepEqual(names(guardRoots(roots(['C#', 'D#', 'A', 'G']), am).roots), ['A', 'A', 'A', 'G']);
+  assert.deepEqual(names(guardRoots(roots(['C#', 'D#']), am).roots), ['A', 'A']);
+  // No key, no guard.
+  assert.deepEqual(guardRoots([1, 6, 11], null).roots, [1, 6, 11]);
+
+  // On a song map: names are power chords, Am and A merge, the input is untouched.
+  const beats = [0, 0.5, 1, 1.5, 2, 2.5];
+  const analysis = { beats, duration: 3, key: am, chords: ['Am', 'A', 'G', 'Bm', 'F', 'E'].map(parseChord), segments: [] };
+  const frozen = JSON.stringify(analysis);
+  const guarded = powerChordAnalysis(analysis);
+  assert.deepEqual(guarded.segments.map(s => s.name), ['A5', 'G5', 'F5', 'E5']);
+  assert.deepEqual(guarded.segments[0].detected, ['Am', 'A']);
+  assert.deepEqual(guarded.segments[1].detected, ['G', 'Bm']);
+  assert.deepEqual(powerChordAnalysis(analysis, { guard: false }).segments.map(s => s.name), ['A5', 'G5', 'B5', 'F5', 'E5']);
+  assert.equal(JSON.stringify(analysis), frozen);
+  const map = createSongMap({ ...guarded, beatInBar: beats.map((_, i) => i % 4), bpm: 120 });
+  assert.equal(map.chordAt(1.2).name, 'G5');
+  assert.equal(map.nearestBeat(0.5).chordChanged, false, 'Am to A is no chord change for power chords');
+});
+
+test('distortion and ceiling curves: finite, bounded, monotonic for any drive (no NaN or infinite gain)', () => {
+  for (const drive of [0, 1e-9, 0.01, 1, RHYTHM_DISTORTION.drive, 50, 1e6, NaN, Infinity, -3]) {
+    const curve = distortionCurve(drive, { bias: RHYTHM_DISTORTION.bias });
+    assert.ok(curve.length % 2 === 1);
+    let previous = -Infinity, peak = 0;
+    for (const v of curve) {
+      assert.ok(Number.isFinite(v), `drive ${drive}: non-finite value`);
+      assert.ok(v >= previous - 1e-7, `drive ${drive}: not monotonic`);
+      previous = v; peak = Math.max(peak, Math.abs(v));
+    }
+    assert.ok(peak <= 1 + 1e-6 && peak > 0.99, `drive ${drive}: peak ${peak}`);
+    const slope = curveSlope(curve);
+    assert.ok(Number.isFinite(slope) && slope > 0, `drive ${drive}: slope ${slope}`);
+    for (const x of [-10, -1, -0.3, 0, 0.3, 1, 10, Infinity, -Infinity]) assert.ok(Math.abs(shapeSample(x, curve)) <= 1 + 1e-6);
+  }
+  // Master ceiling: identity below the knee, never above 0.99 whatever the input.
+  const ceiling = ceilingCurve();
+  for (const x of [0, 0.25, 0.5, 0.89]) assert.ok(Math.abs(shapeSample(x, ceiling) - x) < 1e-3);
+  for (const x of [0.95, 1, 2, 1e9, -1e9]) assert.ok(Math.abs(shapeSample(x, ceiling)) <= 0.99 + 1e-6);
+  const gain = RHYTHM_DISTORTION.preGain * curveSlope(distortionCurve(RHYTHM_DISTORTION.drive, { bias: RHYTHM_DISTORTION.bias }));
+  return `rhythm small-signal gain ${gain.toFixed(1)}x (${(20 * Math.log10(gain)).toFixed(1)} dB)`;
+});
+
+// Model of the electric chain up to the clipper: plucks x voice gain -> bus 0.3 -> pre-gain -> curve
+// (the linear filters around it do not change how far the choked voices fall). A hard 8-string strum
+// of A5 at full velocity, chord change at 0.4 s; compare the output 80-90 ms after it with the
+// 20 ms before. setTargetAtTime(0, t0, tau) is v0 * exp(-(t - t0) / tau).
+function chokeDrop(tone, fadeSeconds) {
+  const sampleRate = 44100, t0 = Math.round(0.4 * sampleRate), length = Math.round(0.6 * sampleRate);
+  const curve = distortionCurve(RHYTHM_DISTORTION.drive, { bias: RHYTHM_DISTORTION.bias });
+  const tau = releaseTimeConstant(fadeSeconds, tone.releaseDepthDb) * sampleRate;
+  const freqs = [110, 110, 164.81, 164.81, 220, 220, 329.63, 329.63];   // 8 strings on the A5 ladder
+  const sum = new Float32Array(length);
+  freqs.forEach((freq, k) => {
+    const data = renderPluck({ freq, sampleRate, t60: tone.string.t60, damping: tone.string.damping, brightness: tone.string.brightness, random: seeded(17 + k) });
+    const start = Math.round(k * 0.015 * sampleRate);                    // strum gap
+    for (let i = start; i < length && i - start < data.length; i++) sum[i] += data[i - start];
+  });
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    const env = i < t0 ? 1 : Math.exp(-(i - t0) / tau);
+    out[i] = shapeSample(sum[i] * env * 0.3 * RHYTHM_DISTORTION.preGain, curve);
+  }
+  const rms = (from, to) => Math.sqrt(out.subarray(from, to).reduce((s, v) => s + v * v, 0) / (to - from));
+  const before = rms(t0 - Math.round(0.02 * sampleRate), t0);
+  const db = (from, to) => 20 * Math.log10(rms(t0 + Math.round(from * sampleRate), t0 + Math.round(to * sampleRate)) / before);
+  let reach = null;   // first 5 ms window at or below -40 dB
+  for (let ms = 0; ms < 190 && reach === null; ms++) if (db(ms / 1000, (ms + 5) / 1000) <= -40) reach = ms + 5;
+  return { drop: db(0.08, 0.09), reach };
+}
+
+test('chord-change choke: the distorted output is at least 40 dB down 80 ms after the change', () => {
+  const tone = TONES.electric;
+  assert.ok(tone.chordChoke <= 0.08 + 1e-9);
+  const { drop, reach } = chokeDrop(tone, tone.chordChoke);
+  assert.ok(drop <= -40 && reach <= 80, `only ${drop.toFixed(1)} dB`);
+  // The acoustic release depth (-26 dB at the voice) would leave the distorted chord far louder.
+  const naive = chokeDrop({ ...tone, releaseDepthDb: TONES.steel.releaseDepthDb }, tone.chordChoke);
+  assert.ok(naive.drop > -40);
+  return `-40 dB after ${reach} ms, ${drop.toFixed(1)} dB at 80-90 ms (acoustic release depth: ${naive.drop.toFixed(1)} dB)`;
 });
 
 // ---------- scoring ----------

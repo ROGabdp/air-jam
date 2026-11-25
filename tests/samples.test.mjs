@@ -15,6 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeSync, retime } from '../src/core/analysis/analysis.js';
 import { chordName } from '../src/core/music/theory.js';
+import { powerChordAnalysis, allowedRoots } from '../src/core/music/power-chords.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const folder = process.env.AIRJAM_SAMPLES ?? join(root, 'samples');
@@ -117,8 +118,7 @@ for (const song of SONGS) {
   const beatMs = 60000 / analysis.bpm;
   const periodOk = song.beats.some(ref => Math.abs(beatMs / ref - 1) <= PERIOD_TOLERANCE);
   const aligned = alignment(analysis.beats, grid, 1, analysis.duration - 1);
-  const ok = periodOk && aligned >= ALIGN_SHARE;
-  if (!ok) failed++;
+  let ok = periodOk && aligned >= ALIGN_SHARE;
 
   const { grouping, meter, evidence } = analysis.autoTempo;
   console.log(`\n${song.file}: ${analysis.bpm.toFixed(2)} BPM (expected ${song.note}), key ${chordName(analysis.key)}, `
@@ -130,6 +130,19 @@ for (const song of SONGS) {
   console.log(`  ${analysis.segments.length} chord segments: `
     + analysis.segments.map(s => `${s.name}@${s.start.toFixed(1)}`).join(' '));
 
+  // Rock chord mode (electric tone): power chords from the triad roots, with and without the
+  // in-key guard. Nothing outside the key's rock degrees may survive the guard.
+  const raw = powerChordAnalysis(analysis, { guard: false });
+  const guarded = powerChordAnalysis(analysis, { guard: true });
+  const allowed = allowedRoots(analysis.key);
+  const outOfKey = guarded.chords.filter(c => !allowed.includes(c.root)).length;
+  const outBefore = raw.chords.filter(c => !allowed.includes(c.root)).length;
+  console.log(`  power chords, no guard (${raw.segments.length}): ` + raw.segments.map(s => `${s.name}@${s.start.toFixed(1)}`).join(' '));
+  console.log(`  power chords, key guard (${guarded.segments.length}, ${guarded.guard.replacedBeats} of ${analysis.chords.length} beats replaced; `
+    + `allowed roots ${allowed.map(r => chordName({ root: r, minor: false })).join(' ')}): `
+    + guarded.segments.map(s => `${s.name}@${s.start.toFixed(1)}`).join(' '));
+  const guardOk = outOfKey === 0;
+
   // Manual corrections must stay on the same pulse grid.
   const corrections = [0.5, 2, 1.5, 2 / 3].map(factor => {
     const corrected = retime(analysis, { factor });
@@ -137,6 +150,8 @@ for (const song of SONGS) {
   });
   console.log(`  manual: ${corrections.join('; ')}`);
 
+  ok = ok && guardOk;
+  if (!ok) failed++;
   table.push({
     song: song.file,
     BPM: analysis.bpm.toFixed(2),
@@ -146,6 +161,8 @@ for (const song of SONGS) {
     'bar s': analysis.barSeconds.toFixed(3),
     key: chordName(analysis.key),
     segments: analysis.segments.length,
+    'power segs (guarded)': `${raw.segments.length} (${guarded.segments.length})`,
+    'out-of-key beats': `${outBefore} → ${outOfKey}`,
     'time ms': ms.toFixed(0),
     ok: ok ? 'PASS' : 'FAIL',
   });

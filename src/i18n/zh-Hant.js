@@ -37,6 +37,7 @@ export default {
   'hud.snap.fallback': 'C 大調五聲音階',
   'hud.tone.steel': '木吉他',
   'hud.tone.nylon': '古典吉他',
+  'hud.tone.electric': '電吉他破音（強力和弦）',
   'hud.demoTitle': '內建示範曲',
   'hud.bpm': '{bpm} BPM',
   'hud.bpmManual': '{bpm} BPM（手動調整）',

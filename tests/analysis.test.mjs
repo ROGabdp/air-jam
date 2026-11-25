@@ -5,6 +5,7 @@ import { renderBacking } from '../src/core/song/backing-synth.js';
 import { renderBand } from './realistic-song.mjs';
 import { DEMO, compareWithTruth } from '../src/core/song/demo-song.js';
 import { chordName, parseChord } from '../src/core/music/theory.js';
+import { powerChordAnalysis, allowedRoots } from '../src/core/music/power-chords.js';
 
 const verbose = process.argv.includes('--verbose');
 const key = name => parseChord(name);
@@ -104,6 +105,21 @@ CASES.push(
   },
 );
 
+// Rock chord mode only uses the root (power chords). Root accuracy per beat, without and with the
+// in-key guard (power-chords.js), and how many beats had a root outside the guard's set.
+function rootAccuracy(analysis, truth) {
+  const chordAt = time => analysis.segments.find(s => time >= s.start && time < s.end);
+  const beatSec = 60 / truth.bpm;
+  let hits = 0, count = 0;
+  truth.beats.forEach((time, i) => {
+    const answer = truth.chords[i];
+    if (!answer) return;
+    count++;
+    if (chordAt(time + beatSec / 2)?.root === answer.root) hits++;
+  });
+  return count ? hits / count : NaN;
+}
+
 let failed = 0;
 const table = [];
 for (const test of CASES) {
@@ -116,9 +132,17 @@ for (const test of CASES) {
   // Half or double tempo still lines up with every beat; some cases accept it (see README limits).
   const bpmOk = [1, ...(test.need.octave ? [2, 0.5] : [])]
     .some(factor => Math.abs(result.bpm - truth.bpm * factor) <= test.need.bpm * factor);
+  const rootsRaw = rootAccuracy(powerChordAnalysis(analysis, { guard: false }), truth);
+  const guarded = powerChordAnalysis(analysis, { guard: true });
+  const rootsGuarded = rootAccuracy(guarded, truth);
+  const allowed = allowedRoots(analysis.key);
+  const outOfKey = guarded.chords.filter(c => !allowed.includes(c.root)).length;
+  // The guard may only replace roots that were wrong anyway: it must not lower root accuracy, and
+  // nothing outside the key's rock degrees may survive it.
   const ok = bpmOk
     && result.chordAccuracy >= test.need.chords
-    && result.beatRecall >= test.need.beats;
+    && result.beatRecall >= test.need.beats
+    && rootsGuarded >= rootsRaw - 1e-9 && outOfKey === 0;
   if (!ok) failed++;
   table.push({
     case: test.name,
@@ -128,6 +152,7 @@ for (const test of CASES) {
     'beats ±70ms': `${(100 * result.beatRecall).toFixed(0)}%`,
     'offset ms': `${result.beatOffsetMs.toFixed(1)} (|${result.beatAbsOffsetMs.toFixed(1)}|)`,
     downbeat: `${(100 * result.downbeatAccuracy).toFixed(0)}%`,
+    'roots → guarded': `${(100 * rootsRaw).toFixed(0)}% → ${(100 * rootsGuarded).toFixed(0)}% (${guarded.guard.replacedBeats})`,
     'time ms': ms.toFixed(0),
     ok: ok ? 'PASS' : 'FAIL',
   });

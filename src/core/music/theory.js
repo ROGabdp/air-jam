@@ -4,8 +4,10 @@ const FLATS = { Db: 'C#', Eb: 'D#', Gb: 'F#', Ab: 'G#', Bb: 'A#' };
 
 export const mod12 = n => ((n % 12) + 12) % 12;
 
+// Power chords (root + fifth, no third) are written like guitar charts: A5.
 export function chordName(chord) {
-  return chord ? NOTE_NAMES[chord.root] + (chord.minor ? 'm' : '') : '–';
+  if (!chord) return '–';
+  return NOTE_NAMES[chord.root] + (chord.power ? '5' : chord.minor ? 'm' : '');
 }
 
 export function parseChord(name) {
@@ -16,7 +18,7 @@ export function parseChord(name) {
 }
 
 export function sameChord(a, b) {
-  return !!a && !!b && a.root === b.root && a.minor === b.minor;
+  return !!a && !!b && a.root === b.root && a.minor === b.minor && !!a.power === !!b.power;
 }
 
 export function noteToMidi(name) {
@@ -48,6 +50,13 @@ export function chordPitchClasses(chord, voicing = 'triad') {
 export function scalePitchClasses(key) {
   const steps = key.minor ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11];
   return steps.map(step => mod12(key.root + step));
+}
+
+// Power-chord ladder: step 0 is the lowest root at or above lowestMidi (so roots sit within one
+// octave, like the bottom strings of a guitar), then fifth, octave, fifth, … upward.
+export function powerChordNote(root, lowestMidi, step) {
+  const base = lowestMidi + mod12(root - lowestMidi);
+  return base + 12 * Math.floor(step / 2) + (step % 2 ? 7 : 0);
 }
 
 export const C_MAJOR_PENTATONIC = [0, 2, 4, 7, 9];

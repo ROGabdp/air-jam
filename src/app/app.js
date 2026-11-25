@@ -9,7 +9,8 @@ import { renderDemoSong, compareWithTruth } from '../core/song/demo-song.js';
 import { createSongMap } from '../core/game/song-map.js';
 import { createScorer } from '../core/game/scoring.js';
 import { createPitchSnapper } from '../core/music/pitch-snap.js';
-import { chordColor, chordName, sameChord } from '../core/music/theory.js';
+import { chordColor, chordName, chordPitchClasses, sameChord } from '../core/music/theory.js';
+import { powerChordAnalysis } from '../core/music/power-chords.js';
 import { createEffects } from '../core/fx/effects.js';
 import { createGestureRecognizer } from '../core/hands/gestures.js';
 import { createMouseInput } from '../core/hands/mouse.js';
@@ -24,6 +25,7 @@ export function createApp() {
   const settings = SETTINGS;
   const query = new URLSearchParams(location.search);
   if (TONES[query.get('tone')]) settings.tone = query.get('tone');
+  if (query.get('keyguard') === 'off') settings.keyGuard = false;
 
   applyTranslations();
   const hud = createHud();
@@ -200,9 +202,39 @@ export function createApp() {
   function setChord(next) {
     if (sameChord(next, chord) || (!next && !chord)) return;
     chord = next;
+    // Distorted tones: voices of the old chord fade out (~80 ms) instead of clashing with the new one.
+    if (chord && audio) audio.chokeChord(chordPitchClasses(chord, pitch.voicing));
     pitch.setChord(chord);
     hud.setChord(chord);
     instrument.onChordChange(chord);
+  }
+
+  // Song map for the current tone: power-chord tones get power chords (root of the triad tracker,
+  // key-guarded when settings.keyGuard), the others the triads as analysed.
+  function mapFor(analysis) {
+    if (!analysis) return null;
+    if (TONES[settings.tone].voicing !== 'power') return createSongMap(analysis);
+    const power = powerChordAnalysis(analysis, { guard: settings.keyGuard });
+    console.info(`[Air Jam] power chords (key guard ${settings.keyGuard ? 'on' : 'off'}, ${power.guard.replacedBeats} beat(s) replaced): `
+      + power.segments.map(s => s.name).join(' '));
+    return createSongMap(power);
+  }
+
+  // Rebuild the map after a tone or guard change and show the chord at the current position.
+  function refreshMap() {
+    if (!song?.analysis) return;
+    song.map = mapFor(song.analysis);
+    const heard = state === 'playing' ? Math.max(0, heardTime()) : 0;
+    setChord(song.map.chordAt(heard + (state === 'playing' ? settings.chordLookahead / 1000 : 0)));
+    hud.setNext(song.map.nextChord(heard));
+  }
+
+  function setTone(id) {
+    settings.tone = id;
+    audio?.setTone(TONES[id]);
+    pitch.setVoicing(TONES[id].voicing);
+    refreshMap();
+    refreshInfo();
   }
 
   function setState(next) {
@@ -281,7 +313,7 @@ export function createApp() {
         console.table(report.rows);
       }
     }
-    song = { title, buffer, analysis, map: analysis ? createSongMap(analysis) : null };
+    song = { title, buffer, analysis, map: mapFor(analysis) };
     instrument.reset();
     fx.clear();
     enterReady();
@@ -323,7 +355,7 @@ export function createApp() {
       return;
     }
     song.analysis = analysis;
-    song.map = createSongMap(analysis);
+    song.map = mapFor(analysis);
     const heard = state === 'playing' ? Math.max(0, heardTime()) : 0;
     lastBeat = state === 'playing' ? song.map.beatIndexAt(heard) : -1;
     clickedBeat = state === 'playing' ? song.map.beatIndexAt(audio.songTime()) : -1;
@@ -458,10 +490,7 @@ export function createApp() {
       refreshInfo();
       hud.toast(snapLabel(), 1.5);
     } else if (key === 't') {
-      settings.tone = TONE_ORDER[(TONE_ORDER.indexOf(settings.tone) + 1) % TONE_ORDER.length];
-      audio?.setTone(TONES[settings.tone]);
-      pitch.setVoicing(TONES[settings.tone].voicing);
-      refreshInfo();
+      setTone(TONE_ORDER[(TONE_ORDER.indexOf(settings.tone) + 1) % TONE_ORDER.length]);
       hud.toast(t(`hud.tone.${settings.tone}`), 1.5);
     }
   });
@@ -476,6 +505,9 @@ export function createApp() {
   // Handle for the console and automated checks.
   return {
     settings, instrument, scorer, pitch, fx,
+    setTone,
+    // In-key root guard for power chords (open question for the owner): airJam.setKeyGuard(false)
+    setKeyGuard(on) { settings.keyGuard = !!on; refreshMap(); },
     get state() { return state; },
     get song() { return song; },
     get audio() { return audio; },

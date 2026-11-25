@@ -16,7 +16,11 @@ export const SETTINGS = {
   metronome: false,        // tick on every detected beat while playing (K), to check the tempo by ear
   videoDim: 0.4,
 
-  tone: 'steel',
+  tone: 'steel',           // 'steel' | 'nylon' | 'electric' (T)
+  // Power chords (electric tone): register and the in-key root guard (src/core/music/power-chords.js).
+  powerLowestNote: 'E2',   // the lowest root sits in E2..D#3, like a guitar's two bottom strings
+  powerSteps: 5,           // root, fifth, octave, fifth, octave: slots spread over these notes (2 octaves)
+  keyGuard: true,          // replace roots outside the key's common rock degrees (owner to confirm)
   maxVoices: 16,
   minStringLength: 0.08,   // fraction of stage width
   maxStringLength: 0.9,
