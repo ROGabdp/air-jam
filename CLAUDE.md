@@ -29,7 +29,7 @@
 - 遊戲名 **Air Jam**（資料夾和網址用 `air-jam`），中文「空中即興」。樂器名例如「空中弦」。
 - **不要**把「Pikasso／畢卡索」或「Feel Sync」當成產品、模式、功能或樂器的名稱（分別屬於 Pat Metheny 的吉他和 Casio），例如不能有「Feel Sync 模式」「畢卡索弦」。
 - 但是**標註靈感來源時一定要寫出這些名字**：公開的地方（README、開始畫面最下面的 credits、之後的關於頁面）要標註手勢弦樂器影片的作者、Pat Metheny 的畢卡索吉他、Casio CT-FS1 的 Feel Sync，並說明 Air Jam 與他們沒有關係。介面上稱呼這個功能時用「和弦吸附」。
-- 正式公開前要先查「Air Jam」有沒有撞名。
+- 「Air Jam」可能和其他作品同名；這是非營利的遊戲，擁有者決定不處理撞名（2026-11-25）。
 - 和弦是程式猜的，要在介面或說明裡誠實告訴玩家。
 
 ## 怎麼執行
@@ -86,7 +86,7 @@ node tests/instrument.test.mjs
 
 ## Git
 
-- 本機 git，目前沒有遠端，不要推送。
+- 遠端：https://github.com/ROGabdp/air-jam （公開 repo），作者用 `ROGabdp <ROGabdp@users.noreply.github.com>`（已設在 repo 的 git config）。推送前要先問擁有者。
 - commit 訊息用英文，結尾加上 attribution 行。
 
 ## 已知限制
