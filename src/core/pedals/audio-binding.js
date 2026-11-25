@@ -1,11 +1,14 @@
-// The only place where the pedalboard meets sound. Today it connects nothing: effects DSP is a
-// later stage. To wire it, give the audio engine an applyPedals(snapshot, change) method (build the
-// chain once; toggles cross-fade, knobs use setTargetAtTime; see docs/效果器_設計挑戰.md M4) and
-// an audition source; nothing in the model, gestures or drawing has to change.
+// The only place where the pedalboard meets sound. The audio engine's applyPedals(snapshot, change)
+// (src/core/audio/engine.js) moves the electric rig to the board's settings: knobs glide, switches
+// cross-fade between two copies of the chain, nothing is rebuilt while playing. Only overdrive and
+// distortion have sound so far (model.js PEDALS_WITH_SOUND; snapshot.pedals[id].sound); wah,
+// chorus, delay and reverb are stored but silent. The game also calls applyPedals once when it
+// creates the engine (first user gesture), so settings made before that are heard.
 //
 // snapshot (model.boardSnapshot): { mode, autoLevel, preset, order: ['wah', …, 'amp', …],
-//   pedals: { [id]: { on, params: { knob: 0..1 }, values: { knob: physical units } } } }
+//   pedals: { [id]: { on, sound, params: { knob: 0..1 }, values: { knob: physical units } } } }
 // change: see createPedalModel (toggle / param / order / preset / mode / load).
+// The chain order is not applied to the sound yet (fixed: overdrive → distortion → amp).
 
 /**
  * @param {{subscribe:Function, snapshot:Function}} model
@@ -19,7 +22,7 @@ export function bindPedalAudio(model, getEngine) {
     if (typeof engine?.applyPedals === 'function') { engine.applyPedals(snapshot, change); return; }
     if (!told) {
       told = true;
-      console.info('[Air Jam] pedalboard: effects DSP is not connected yet; the board only stores settings.');
+      console.info('[Air Jam] pedalboard: no audio engine yet; the settings are applied when it starts.');
     }
   };
   return model.subscribe(apply);

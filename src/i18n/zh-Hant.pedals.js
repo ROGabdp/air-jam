@@ -15,7 +15,7 @@ export default {
   'pedal.chainNote': '點上面一顆選它；◀ ▶ 移動它在效果鏈裡的位置',
   'pedal.ampNote': '音箱一直開著；可以用 ◀ ▶ 把效果器移到它前面或後面',
   'pedal.auditionOn': '試聽循環播放中',
-  'pedal.auditionOff': '效果器的聲音還沒接上：這一版只有介面，設定會記住',
+  'pedal.auditionOff': '過載和破音已經有聲音，演奏時聽得到；試聽循環和其他效果器還沒接上',
   'pedal.toastOn': '{name}：開',
   'pedal.toastOff': '{name}：關',
   'pedal.wahHint': '上下移動',

@@ -7,6 +7,11 @@
 //                                                    dB for lowpass/highpass, ignored by shelves)
 //   { kind: 'gain', value }                         GainNode
 //   { kind: 'shaper', curve: { kind, drive, bias, n }, oversample? }   WaveShaperNode
+//   { kind: 'mix', branches: [{ weight, stages }] }  parallel branches summed, a GainNode per branch
+//                                                    (cross-fades: a pedal's on/off, the clipper blend)
+// Any stage may carry an `id` (documentation only). A chain built from a list can later be moved to
+// another list of the same shape (same kinds, types, curves in the same places) with update(): the
+// numbers glide there with setTargetAtTime and nothing is rebuilt, so a ringing note is never cut.
 import { clipCurve, curveSlope, shapeSample } from './distortion.js';
 
 /**
@@ -76,39 +81,151 @@ export function stageCurve(stage) {
 }
 
 /**
- * Builds the stages as a series of Web Audio nodes.
- * @returns {{ input: AudioNode, output: AudioNode, nodes: AudioNode[], dispose(): void }}
+ * Builds the stages as Web Audio nodes.
+ * @returns {{ input: AudioNode, output: AudioNode, nodes: AudioNode[], dispose(): void,
+ *             update(stages: object[], o?: { when?: number, tau?: number }): void }}
  */
 export function buildStages(ctx, stages) {
-  const input = ctx.createGain();
-  const nodes = [input];
-  for (const stage of stages) {
-    let node;
-    if (stage.kind === 'biquad') {
-      node = ctx.createBiquadFilter();
-      node.type = stage.type;
-      node.frequency.value = stage.frequency;
-      if (stage.Q !== undefined) node.Q.value = stage.Q;
-      if (stage.gain !== undefined) node.gain.value = stage.gain;
-    } else if (stage.kind === 'gain') {
-      node = ctx.createGain();
-      node.gain.value = stage.value;
-    } else if (stage.kind === 'shaper') {
-      node = ctx.createWaveShaper();
-      node.curve = stageCurve(stage);
-      node.oversample = stage.oversample ?? '4x';
-    } else {
-      throw new Error(`unknown stage kind: ${stage.kind}`);
+  const nodes = [];
+  // Every automatable AudioParam in the order stageNumbers() lists the values.
+  const params = [];
+
+  // Builds `list` in series after `from`; returns the last node.
+  function series(from, list) {
+    let last = from;
+    for (const stage of list) {
+      let node;
+      if (stage.kind === 'biquad') {
+        node = ctx.createBiquadFilter();
+        node.type = stage.type;
+        node.frequency.value = stage.frequency;
+        if (stage.Q !== undefined) node.Q.value = stage.Q;
+        if (stage.gain !== undefined) node.gain.value = stage.gain;
+        params.push(node.frequency, node.Q, node.gain);
+        last.connect(node);
+      } else if (stage.kind === 'gain') {
+        node = ctx.createGain();
+        node.gain.value = stage.value;
+        params.push(node.gain);
+        last.connect(node);
+      } else if (stage.kind === 'shaper') {
+        node = ctx.createWaveShaper();
+        node.curve = stageCurve(stage);
+        node.oversample = stage.oversample ?? '4x';
+        last.connect(node);
+      } else if (stage.kind === 'mix') {
+        node = ctx.createGain();
+        for (const branch of stage.branches) {
+          const weight = ctx.createGain();
+          weight.gain.value = branch.weight;
+          params.push(weight.gain);
+          nodes.push(weight);
+          series(last, branch.stages).connect(weight);
+          weight.connect(node);
+        }
+      } else {
+        throw new Error(`unknown stage kind: ${stage.kind}`);
+      }
+      nodes.push(node);
+      last = node;
     }
-    nodes.at(-1).connect(node);
-    nodes.push(node);
+    return last;
   }
+
+  const input = ctx.createGain();
+  nodes.push(input);
+  const output = series(input, stages);
+  const shape = shapeOf(stages);
   return {
     input,
-    output: nodes.at(-1),
+    output,
     nodes,
     dispose() { for (const node of nodes) node.disconnect(); },
+    // Glides to the numbers of `next` (tau > 0), or sets them at `when` (tau = 0: only on a silent chain).
+    update(next, { when = ctx.currentTime, tau = 0.02 } = {}) {
+      if (shapeOf(next) !== shape) throw new Error('stage list has a different shape; build a new chain');
+      stageNumbers(next).forEach((value, i) => {
+        if (value === undefined) return;
+        params[i].cancelScheduledValues(when);
+        if (tau > 0) params[i].setTargetAtTime(value, when, tau);
+        else params[i].setValueAtTime(value, when);
+      });
+    },
   };
+}
+
+/**
+ * Two copies of a chain fed by the same input, one audible at a time. Knob moves glide on the
+ * audible copy (update); a switch (a pedal on/off, a preset) sets the silent copy to the new numbers
+ * and cross-fades to it (switchTo), so the change sounds like a cross-fade between two settled
+ * sounds: no level spike while a loud branch fades out and a quieter one is levelled up, and the
+ * clipper/bypass branches inside a copy never have to line up in time. The silent copy keeps
+ * running, so its filters are warm when it fades in.
+ * @returns {{ input, output, nodes, dispose(), update(stages, o?), switchTo(stages, o?) }}
+ */
+export function buildSwitchableStages(ctx, stages) {
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const copies = [0, 1].map(i => {
+    const chain = buildStages(ctx, stages);
+    const fader = ctx.createGain();
+    fader.gain.value = i === 0 ? 1 : 0;
+    input.connect(chain.input);
+    chain.output.connect(fader).connect(output);
+    return { chain, fader };
+  });
+  let active = 0;
+  let busyUntil = -Infinity;   // a switch is still fading: the other copy is not silent yet
+  return {
+    input,
+    output,
+    get nodes() { return [input, output, ...copies.flatMap(c => [...c.chain.nodes, c.fader])]; },
+    get active() { return active; },
+    dispose() {
+      input.disconnect(); output.disconnect();
+      for (const c of copies) { c.chain.dispose(); c.fader.disconnect(); }
+    },
+    update(next, { when = ctx.currentTime, tau = 0.025 } = {}) {
+      copies[active].chain.update(next, { when, tau });
+    },
+    /**
+     * @param {object} [o]
+     * @param {number} [o.fade]  cross-fade time constant (s); ~3× is the audible length
+     * @param {number} [o.settle] wait (s) between setting the silent copy and starting the fade
+     * @returns {boolean} false when a previous switch was still fading (then it glides instead)
+     */
+    switchTo(next, { when = ctx.currentTime, fade = 0.012, settle = 0.005 } = {}) {
+      if (when < busyUntil) { copies[active].chain.update(next, { when, tau: fade }); return false; }
+      const from = copies[active], to = copies[1 - active];
+      to.chain.update(next, { when, tau: 0 });
+      for (const [copy, target] of [[from, 0], [to, 1]]) {
+        copy.fader.gain.cancelScheduledValues(when);
+        copy.fader.gain.setTargetAtTime(target, when + settle, fade);
+      }
+      active = 1 - active;
+      busyUntil = when + settle + fade * 7;
+      return true;
+    },
+  };
+}
+
+// Automatable numbers of a stage list in the order buildStages creates their AudioParams
+// (biquad: frequency, Q, gain; gain: value; mix: per branch its weight, then the branch's own).
+export function stageNumbers(stages, out = []) {
+  for (const stage of stages) {
+    if (stage.kind === 'biquad') out.push(stage.frequency, stage.Q, stage.gain);
+    else if (stage.kind === 'gain') out.push(stage.value);
+    else if (stage.kind === 'mix') {
+      for (const branch of stage.branches) { out.push(branch.weight); stageNumbers(branch.stages, out); }
+    }
+  }
+  return out;
+}
+
+// Everything update() cannot glide (kinds, filter types, curves, oversampling), as a string.
+export function shapeOf(stages) {
+  return JSON.stringify(stages, (key, value) => (
+    ['frequency', 'Q', 'gain', 'value', 'weight', 'id'].includes(key) && typeof value !== 'object' ? 0 : value));
 }
 
 /**
@@ -117,7 +234,7 @@ export function buildStages(ctx, stages) {
  * match closely.
  */
 export function processStages(stages, input, sampleRate) {
-  const out = Float32Array.from(input);
+  let out = Float32Array.from(input);
   for (const stage of stages) {
     if (stage.kind === 'gain') {
       for (let i = 0; i < out.length; i++) out[i] *= stage.value;
@@ -133,6 +250,15 @@ export function processStages(stages, input, sampleRate) {
         x2 = x1; x1 = x; y2 = y1; y1 = y;
         out[i] = Math.abs(y) < 1e-30 ? 0 : y;
       }
+    } else if (stage.kind === 'mix') {
+      // Silent branches (weight 0: a settled cross-fade) are skipped.
+      const sum = new Float32Array(out.length);
+      for (const branch of stage.branches) {
+        if (!branch.weight) continue;
+        const y = processStages(branch.stages, out, sampleRate);
+        for (let i = 0; i < sum.length; i++) sum[i] += branch.weight * y[i];
+      }
+      out = sum;
     }
   }
   return out;
@@ -150,6 +276,9 @@ export function stagesResponse(stages, frequencies, sampleRate = 48000) {
       else if (stage.kind === 'shaper') magnitude *= curveSlope(stageCurve(stage));
       else if (stage.kind === 'biquad') {
         magnitude *= biquadMagnitude(biquadCoefficients(stage.type, stage.frequency, stage.Q ?? 1, stage.gain ?? 0, sampleRate), frequency, sampleRate);
+      } else if (stage.kind === 'mix') {
+        // Branch magnitudes summed (exact for a settled cross-fade, where one branch has weight 1).
+        magnitude *= stage.branches.reduce((sum, b) => sum + Math.abs(b.weight) * stagesResponse(b.stages, [frequency], sampleRate)[0], 0);
       }
     }
     return magnitude;
@@ -163,11 +292,18 @@ export function stagesResponse(stages, frequencies, sampleRate = 48000) {
  * the current electric tone is ~24 dB); with `frequency`, the filters at that frequency count too.
  */
 export function driveDb(stages, { frequency = null, sampleRate = 48000 } = {}) {
-  const last = stages.map(s => s.kind).lastIndexOf('shaper');
+  // A mix counts as a clipper when a live branch clips; its gain is then the weighted sum of its
+  // branches' gains up to their last clipper.
+  const clips = stage => stage.kind === 'shaper'
+    || (stage.kind === 'mix' && stage.branches.some(b => b.weight && b.stages.some(clips)));
+  let last = -1;
+  stages.forEach((stage, i) => { if (clips(stage)) last = i; });
   if (last < 0) return 0;
-  const upTo = stages.slice(0, last + 1).filter(s => frequency !== null || s.kind !== 'biquad');
-  const [magnitude] = stagesResponse(upTo, [frequency ?? 1000], sampleRate);
-  return 20 * Math.log10(magnitude);
+  const strip = list => list
+    .filter(s => frequency !== null || s.kind !== 'biquad')
+    .map(s => (s.kind === 'mix' ? { ...s, branches: s.branches.map(b => ({ ...b, stages: strip(b.stages) })) } : s));
+  const [magnitude] = stagesResponse(strip(stages.slice(0, last + 1)), [frequency ?? 1000], sampleRate);
+  return 20 * Math.log10(Math.max(1e-12, magnitude));
 }
 
 /**

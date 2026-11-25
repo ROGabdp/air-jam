@@ -1,9 +1,17 @@
 // Web Audio engine: song playback, plucked voices in parts (each part has its own tone and
-// effect-chain instance), voice limiting, chord-change chokes and output protection. Everything is
-// timed on AudioContext.currentTime.
-import { renderPluck } from './karplus.js';
+// effect-chain instance), voice limiting, chord-change chokes, the pedalboard's settings for the
+// electric rig, and output protection. Everything is timed on AudioContext.currentTime.
+import { createPluck } from './karplus.js';
 import { releaseTimeConstant, ceilingCurve } from './distortion.js';
 import { voiceParams, t60For } from './voice-params.js';
+import { rigFromSnapshot, electricTone } from './electric-rig.js';
+
+// Live contexts render only the first part of a pluck when it is played and the rest a moment later,
+// in small slices between frames (most of a long note is never heard: the next strum chokes it).
+export const PLUCK_HEAD_SECONDS = 0.4;
+const TAIL_SLICE_MS = 4;
+// Pedal changes (setTargetAtTime time constants): knobs glide, switches cross-fade in ~3τ.
+export const PEDAL_TAU = { toggle: 0.012, knob: 0.025 };
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const pitchClassOf = freq => ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12) + 12) % 12;
@@ -15,8 +23,10 @@ const pitchClassOf = freq => ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12)
  * @param {boolean} [o.master]  false: strings and song go straight to the output, without the glue
  *                              compressor, limiter and ceiling (to measure a tone chain on its own)
  */
-export function createAudioEngine(settings, { context = null, master = true } = {}) {
+export function createAudioEngine(settings, { context = null, master = true, streaming = context === null } = {}) {
   const ctx = context ?? new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+  // Electric rig settings from the pedalboard (null: no pedalboard, the rig is 丁 = 搖滾).
+  let pedalSnapshot = null;
 
   // song ────────────────────────────────────────────────────► songGain ─┐
   // voices ► part bus ► part's tone chain ► trim ─┐                       │
@@ -67,22 +77,87 @@ export function createAudioEngine(settings, { context = null, master = true } = 
   }
 
   let voices = [];
-  // Fade a voice so it is `voice.depthDb` down after `fadeSeconds` (the tone's release depth).
+  // Fade a voice so it is its release depth down after `fadeSeconds`: the tone's depth when it was
+  // plucked, or now if the pedals have added drive since.
   function release(voice, fadeSeconds, when = ctx.currentTime) {
     const from = Math.max(when, voice.when);
     voice.released = true;
-    const tau = releaseTimeConstant(fadeSeconds, voice.depthDb);
+    const depth = Math.max(voice.depthDb, parts.get(voice.part)?.tone?.releaseDepthDb ?? 0);
+    const tau = releaseTimeConstant(fadeSeconds, depth);
     for (const gain of voice.gains) {
       gain.gain.cancelScheduledValues(from);
       gain.gain.setTargetAtTime(0, from, tau);
     }
+    voice.stopAt = from + Math.max(fadeSeconds * 1.5, tau * 7);
     for (const source of voice.sources) {
-      try { source.stop(from + Math.max(fadeSeconds * 1.5, tau * 7)); } catch { /* already stopped */ }
+      try { source.stop(voice.stopAt); } catch { /* already stopped */ }
     }
   }
 
+  // ---------- pluck tails (live contexts) ----------
+  // A pluck's first PLUCK_HEAD_SECONDS play from a buffer rendered on the spot; the rest is a queued
+  // tail, rendered in ≤ TAIL_SLICE_MS slices and started exactly where the head ends (both on whole
+  // sample frames). Tails of voices that are released before them are never rendered.
+  const tails = [];
+  let tailsQueued = false;
+  const channel = typeof MessageChannel === 'function' ? new MessageChannel() : null;
+  if (channel) {
+    channel.port1.onmessage = () => { tailsQueued = false; renderTails(); };
+    channel.port1.unref?.();   // Node (tests with a fake context): do not keep the process alive
+  }
+  function queueTails() {
+    if (tailsQueued || !tails.length) return;
+    tailsQueued = true;
+    if (channel) channel.port2.postMessage(0);
+    else setTimeout(() => { tailsQueued = false; renderTails(); }, 0);
+  }
+  function renderTails(budgetMs = TAIL_SLICE_MS) {
+    const started = performance.now();
+    tails.sort((a, b) => a.start - b.start);
+    while (tails.length && performance.now() - started < budgetMs) {
+      const tail = tails.shift();
+      const { voice } = tail;
+      voice.pendingTails--;
+      if (voice.released && voice.stopAt <= tail.start) { settle(voice); continue; }
+      const data = tail.pluck.next(tail.pluck.length - tail.pluck.rendered);
+      const source = startBuffer(data, tail.start, tail.gain);
+      voice.sources.push(source);
+      if (voice.released) { try { source.stop(voice.stopAt); } catch { /* past */ } }
+      source.onended = () => settle(voice, true);
+    }
+    queueTails();
+  }
+  function startBuffer(data, when, destination) {
+    const buffer = ctx.createBuffer(1, data.length, ctx.sampleRate);
+    buffer.getChannelData(0).set(data);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(destination);
+    const late = ctx.currentTime - when;
+    // A tail rendered after its start time (a long stall) keeps its place: it starts part-way in.
+    if (late > 0) source.start(ctx.currentTime, late);
+    else source.start(when);
+    return source;
+  }
+  // A voice is finished when all its sources ended and no tail is pending.
+  function settle(voice, sourceEnded = false) {
+    if (voice.done) return;
+    if (sourceEnded) voice.ended++;
+    if (voice.pendingTails > 0 || voice.ended < voice.sources.length) return;
+    voice.done = true;
+    voices = voices.filter(x => x !== voice);
+    for (const s of voice.sources) s.disconnect();
+    for (const g of voice.gains) g.disconnect();
+    voice.panner?.disconnect();
+  }
+
+  // The electric rig's tone for the current pedal settings (other tones are used as they are).
+  const resolveTone = tone => (tone?.rig ? electricTone(rigFromSnapshot(pedalSnapshot)) : tone);
+
   function setTone(next, partName = 'rhythm') {
+    next = resolveTone(next);
     const p = part(partName);
+    p.rigKey = next?.rig ? JSON.stringify(next.stages) : null;
     // Voices of the old tone would otherwise ring on through the new chain.
     for (const voice of voices) if (voice.part === partName && !voice.released) release(voice, 0.03);
     p.bus.disconnect();
@@ -118,6 +193,33 @@ export function createAudioEngine(settings, { context = null, master = true } = 
     }
   }
 
+  /**
+   * Pedalboard settings (src/core/pedals/audio-binding.js calls this with every model change, and
+   * the game once when the engine is created). Parts playing the electric rig move their chains to
+   * the new numbers without rebuilding them: toggles cross-fade, knobs glide, ringing notes go on.
+   * Pedals without sound (snapshot.pedals[id].sound === false) are ignored.
+   * @returns {object} the rig numbers now in use
+   */
+  function applyPedals(snapshot, change = { type: 'load' }) {
+    pedalSnapshot = snapshot ?? null;
+    const rig = rigFromSnapshot(pedalSnapshot);
+    const tone = electricTone(rig);
+    const key = JSON.stringify(tone.stages);
+    // Knobs glide on the audible copy; anything that switches a pedal cross-fades to the other copy.
+    const glide = change?.type === 'param';
+    for (const p of parts.values()) {
+      if (!p.tone?.rig || p.rigKey === key) continue;
+      for (const [chain, stages] of [[p.chain, tone.stages], [p.double?.chain, tone.double.stages]]) {
+        if (!chain) continue;
+        if (glide) chain.update(stages, { tau: PEDAL_TAU.knob });
+        else chain.switchTo(stages, { fade: PEDAL_TAU.toggle });
+      }
+      p.tone = tone;
+      p.rigKey = key;
+    }
+    return rig;
+  }
+
   // Level of a part after its chain (1 = as the tone is voiced). The tone lab level-matches with it.
   function setTrim(gain, partName = 'rhythm', { smooth = true } = {}) {
     const p = part(partName);
@@ -135,6 +237,7 @@ export function createAudioEngine(settings, { context = null, master = true } = 
       if (voice.part !== partName || voice.released) continue;
       if (voice.when > when) {
         voice.released = true;
+        voice.stopAt = voice.when;
         for (const source of voice.sources) { try { source.stop(); } catch { /* already stopped */ } }
       } else {
         release(voice, fadeSeconds, when);
@@ -179,19 +282,26 @@ export function createAudioEngine(settings, { context = null, master = true } = 
     const p = part(partName);
     const tone = p.tone;
     if (!tone) return;
-    const when = ctx.currentTime + delay;
+    const sampleRate = ctx.sampleRate;
+    // On a whole sample frame, so a streamed tail continues the head exactly.
+    const when = streaming ? Math.round((ctx.currentTime + delay) * sampleRate) / sampleRate : ctx.currentTime + delay;
     const { render, gain: level } = voiceParams(tone, { freq, velocity, position }, settings);
+    const voice = {
+      sources: [], gains: [], key, when, released: false, part: partName, panner: null,
+      pitchClass: pitchClassOf(freq), depthDb: tone.releaseDepthDb, stopAt: Infinity, pendingTails: 0, ended: 0, done: false,
+    };
     const take = (options, start, destination) => {
-      const data = renderPluck({ ...options, sampleRate: ctx.sampleRate });
-      const buffer = ctx.createBuffer(1, data.length, ctx.sampleRate);
-      buffer.getChannelData(0).set(data);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
+      const pluck = createPluck({ ...options, sampleRate });
+      const head = streaming ? Math.min(pluck.length, Math.round(PLUCK_HEAD_SECONDS * sampleRate)) : pluck.length;
       const gain = ctx.createGain();
       gain.gain.value = level;
-      source.connect(gain).connect(destination);
-      source.start(start);
-      return { source, gain };
+      gain.connect(destination);
+      const source = startBuffer(pluck.next(head), start, gain);
+      voice.sources.push(source); voice.gains.push(gain);
+      if (pluck.rendered < pluck.length) {
+        voice.pendingTails++;
+        tails.push({ voice, pluck, gain, start: start + head / sampleRate });
+      }
     };
 
     // Strum choke (only tones that ask for it): a new strum, i.e. a pluck more than strumWindow
@@ -203,50 +313,33 @@ export function createAudioEngine(settings, { context = null, master = true } = 
     }
     p.lastPluckWhen = Math.max(p.lastPluckWhen, when);
 
-    const sources = [], gains = [];
-    let panner = null;
     if (p.double) {
       // Double-tracked: no per-string pan (the two chains are panned apart). The second take has
       // its own excitation noise, a slight detune and a short delay, like a second recorded pass.
       const detune = Math.pow(2, tone.double.detuneCents / 1200);
-      for (const [options, start, bus] of [[render, when, p.bus], [{ ...render, freq: render.freq * detune }, when + tone.double.delay, p.double.bus]]) {
-        const t = take(options, start, bus);
-        sources.push(t.source); gains.push(t.gain);
-      }
+      const delay2 = streaming ? Math.round(tone.double.delay * sampleRate) / sampleRate : tone.double.delay;
+      take(render, when, p.bus);
+      take({ ...render, freq: render.freq * detune }, when + delay2, p.double.bus);
     } else {
       let destination = p.bus;
       if (ctx.createStereoPanner) {
-        panner = ctx.createStereoPanner();
-        panner.pan.value = clamp(pan * (tone.panWidth ?? 1), -1, 1);
-        panner.connect(p.bus);
-        destination = panner;
+        voice.panner = ctx.createStereoPanner();
+        voice.panner.pan.value = clamp(pan * (tone.panWidth ?? 1), -1, 1);
+        voice.panner.connect(p.bus);
+        destination = voice.panner;
       }
-      const t = take(render, when, destination);
-      sources.push(t.source); gains.push(t.gain);
+      take(render, when, destination);
     }
-
-    const voice = {
-      sources, gains, key, when, released: false, part: partName,
-      pitchClass: pitchClassOf(freq), depthDb: tone.releaseDepthDb,
-    };
     // Re-plucking a string chokes its previous voice, and the voice limit fades the oldest, both
     // from the moment the new voice starts (strums are scheduled a little ahead).
     if (key !== null) {
       for (const other of voices) if (other.key === key && other.part === partName && !other.released) release(other, 0.04, when);
     }
     voices.push(voice);
-    let ended = 0;
-    for (const source of sources) {
-      source.onended = () => {
-        if (++ended < sources.length) return;
-        voices = voices.filter(x => x !== voice);
-        for (const s of sources) s.disconnect();
-        for (const g of gains) g.disconnect();
-        panner?.disconnect();
-      };
-    }
+    for (const source of voice.sources) source.onended = () => settle(voice, true);
     const active = voices.filter(x => !x.released);
     for (let i = 0; i < active.length - settings.maxVoices; i++) release(active[i], 0.06, when);
+    queueTails();
   }
 
   let song = null;
@@ -308,7 +401,10 @@ export function createAudioEngine(settings, { context = null, master = true } = 
   return {
     ctx,
     setTone,
+    applyPedals,
     get tone() { return parts.get('rhythm')?.tone ?? null; },
+    // Electric rig numbers for the current pedal settings (for the console and measurements).
+    get rig() { return rigFromSnapshot(pedalSnapshot); },
     pluck,
     chokeChord,
     applyVolumes,
@@ -339,6 +435,9 @@ export function createAudioEngine(settings, { context = null, master = true } = 
       return buffer;
     },
     get voiceCount() { return voices.length; },
+    get pendingTails() { return tails.length; },
+    // Renders every queued tail now (tests and measurements).
+    flushTails: () => renderTails(Infinity),
   };
 }
 

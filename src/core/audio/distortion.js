@@ -99,8 +99,37 @@ export function hardClipCurve(drive, { n = 4, bias = 0.08, samples = 4097 } = {}
   return curve;
 }
 
-// Curve for a shaper stage description { kind: 'tanh' | 'hard', drive, bias, n }.
-export function clipCurve({ kind = 'tanh', drive, bias = 0, n = 4 }) {
+/**
+ * Fuzz-like curve for the top of the distortion range: a very hard knee on the positive side and a
+ * softer, lower ceiling on the negative side (strongly asymmetric: lots of even harmonics, a
+ * "broken" edge), y = f(k·x) with f(u) = u / (1 + uⁿ)^(1/n) for u ≥ 0 and
+ * f(u) = −c · tanh(−u / c) for u < 0, normalised to ±1 at most. The slope at 0 is k on both sides,
+ * so it can be cross-faded with the other clippers at the same input gain. The DC this adds is
+ * removed by the cabinet high-pass after it.
+ * @param {number} drive  slope at the origin before normalisation (clamped to 0.01..100)
+ * @param {object} [o]
+ * @param {number} [o.n]        positive knee sharpness, clamped to 1..40
+ * @param {number} [o.ceiling]  negative ceiling relative to the positive one, clamped to 0.2..1
+ */
+export function fuzzCurve(drive, { n = 12, ceiling = 0.55, samples = 4097 } = {}) {
+  const k = Number.isFinite(drive) ? Math.max(0.01, Math.min(100, drive)) : drive > 0 ? 100 : 0.01;
+  const p = Number.isFinite(n) ? Math.max(1, Math.min(40, n)) : 12;
+  const c = Number.isFinite(ceiling) ? Math.max(0.2, Math.min(1, ceiling)) : 0.55;
+  const count = Math.max(3, samples | 1);
+  const curve = new Float32Array(count);
+  let peak = 0;
+  for (let i = 0; i < count; i++) {
+    const u = k * ((i / (count - 1)) * 2 - 1);
+    curve[i] = u >= 0 ? u / Math.pow(1 + Math.pow(u, p), 1 / p) : -c * Math.tanh(-u / c);
+    peak = Math.max(peak, Math.abs(curve[i]));
+  }
+  for (let i = 0; i < count; i++) curve[i] /= peak;
+  return curve;
+}
+
+// Curve for a shaper stage description { kind: 'tanh' | 'hard' | 'fuzz', drive, bias, n, ceiling }.
+export function clipCurve({ kind = 'tanh', drive, bias = 0, n = 4, ceiling }) {
+  if (kind === 'fuzz') return fuzzCurve(drive, { n, ceiling });
   return kind === 'hard' ? hardClipCurve(drive, { n, bias }) : distortionCurve(drive, { bias });
 }
 

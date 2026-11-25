@@ -9,7 +9,8 @@ import { createPitchSnapper } from '../src/core/music/pitch-snap.js';
 import { chordPitchClasses, scalePitchClasses, parseChord, mod12, C_MAJOR_PENTATONIC, chordName, noteToMidi } from '../src/core/music/theory.js';
 import { guardRoots, allowedRoots, powerChordAnalysis } from '../src/core/music/power-chords.js';
 import { distortionCurve, curveSlope, shapeSample, releaseTimeConstant, ceilingCurve } from '../src/core/audio/distortion.js';
-import { TONES, RHYTHM_DISTORTION } from '../src/core/audio/tones.js';
+import { TONES, RHYTHM_DISTORTION, LEGACY_ELECTRIC } from '../src/core/audio/tones.js';
+import { toneVoicing } from '../src/core/audio/electric-rig.js';
 import { createScorer } from '../src/core/game/scoring.js';
 import { createSongMap } from '../src/core/game/song-map.js';
 import { createAirStrings } from '../src/instruments/air-strings/index.js';
@@ -212,7 +213,7 @@ test('scale mode, free mode and the no-analysis fallback', () => {
 test('power chords: only root and fifth, for all 24 detected chords and every slot, in a low register', () => {
   const settings = { ...SETTINGS, snapMode: 'chord' };
   const snapper = createPitchSnapper(settings);
-  snapper.setVoicing(TONES.electric.voicing);
+  snapper.setVoicing(toneVoicing(TONES.electric, null));   // the electric rig with drive engaged
   const lowest = noteToMidi(settings.powerLowestNote);
   let checked = 0, top = -Infinity;
   for (let root = 0; root < 12; root++) for (const minor of [false, true]) {
@@ -327,8 +328,10 @@ function chokeDrop(tone, fadeSeconds) {
   return { drop: db(0.08, 0.09), reach };
 }
 
-test('chord-change choke: the distorted output is at least 40 dB down 80 ms after the change', () => {
-  const tone = TONES.electric;
+// The one-clipper model fits 甲 (the electric tone before 丁); the 丁 rig's chokes are measured with the
+// full Node model in tests/tone-lab.test.mjs and tests/electric-rig.test.mjs.
+test('chord-change choke (甲): the distorted output is at least 40 dB down 80 ms after the change', () => {
+  const tone = LEGACY_ELECTRIC;
   assert.ok(tone.chordChoke <= 0.08 + 1e-9);
   const { drop, reach } = chokeDrop(tone, tone.chordChoke);
   assert.ok(drop <= -40 && reach <= 80, `only ${drop.toFixed(1)} dB`);

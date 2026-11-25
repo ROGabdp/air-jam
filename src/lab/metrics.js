@@ -4,7 +4,7 @@
 // Web Audio graph in an OfflineAudioContext. Same definitions on both sides.
 import { renderPluck } from '../core/audio/karplus.js';
 import { voiceParams } from '../core/audio/voice-params.js';
-import { stagesResponse, driveDb, deepestNotchDb } from '../core/audio/stages.js';
+import { stagesResponse, driveDb, deepestNotchDb, processStages } from '../core/audio/stages.js';
 import { createFFT } from '../core/analysis/dsp.js';
 import { midiToFreq } from '../core/music/theory.js';
 
@@ -200,5 +200,36 @@ export async function measureTone({ render, tone, settings, song = null, repeats
 
   // 7. Booster small-signal response: deepest notch 100 Hz – 5 kHz.
   if (booster) result.boosterNotch = responseNotch(booster).notch;
+
+  // 8. Crunch: how broken the sound is, from a two-tone test through the chain (see distortionProducts).
+  if (tone.stages) Object.assign(result, distortionProducts(tone.stages));
   return result;
+}
+
+/**
+ * Two-tone test (A3 + E4 sines, 0.05 each: about the RMS a medium strum has where the chain starts)
+ * through a stage list. Returns, relative to the two tones at the output (dB):
+ *   distortion  every other product (harmonics and intermodulation, 40 Hz–8 kHz): how broken
+ *   fizz        the products above 1.5 kHz: grit and fizz
+ * A clean chain gives about −41 dB (the analysis window's leakage floor).
+ */
+export function distortionProducts(stages, { amplitude = 0.05, sampleRate = 44100, size = 16384 } = {}) {
+  const f1 = 220, f2 = 329.63;
+  const n = size + Math.round(sampleRate / 2);
+  const x = new Float32Array(n);
+  for (let i = 0; i < n; i++) x[i] = amplitude * (Math.sin(2 * Math.PI * f1 * i / sampleRate) + Math.sin(2 * Math.PI * f2 * i / sampleRate));
+  const y = processStages(stages, x, sampleRate);
+  const fft = createFFT(size), re = new Float32Array(size), im = new Float32Array(size);
+  for (let i = 0; i < size; i++) re[i] = y[n - size + i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / size));
+  fft(re, im);
+  let tones = 0, products = 0, fizz = 0;
+  for (let k = 1; k < size / 2; k++) {
+    const f = k * sampleRate / size;
+    if (f < 40 || f > 8000) continue;
+    const p = re[k] * re[k] + im[k] * im[k];
+    if (Math.abs(f - f1) < 8 || Math.abs(f - f2) < 8) tones += p;
+    else { products += p; if (f > 1500) fizz += p; }
+  }
+  const ratio = v => 10 * Math.log10(Math.max(1e-30, v) / Math.max(1e-30, tones));
+  return { distortion: ratio(products), fizz: ratio(fizz) };
 }

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { hardClipCurve, clipCurve, curveSlope, shapeSample, chokeDepthDb, distortionCurve } from '../src/core/audio/distortion.js';
 import { biquadCoefficients, biquadMagnitude, processStages, stagesResponse, driveDb, deepestNotchDb } from '../src/core/audio/stages.js';
-import { TONES, RHYTHM_DISTORTION, ampStages } from '../src/core/audio/tones.js';
+import { TONES, LEGACY_ELECTRIC, RHYTHM_DISTORTION, ampStages } from '../src/core/audio/tones.js';
 import { voiceParams } from '../src/core/audio/voice-params.js';
 import { LAB_COMBOS, LAB_ORDER, boosterStages } from '../src/core/audio/tone-lab.js';
 import { buildPerformance, loopSection, barAtOrAfter, PERFORMANCES } from '../src/lab/performances.js';
@@ -96,7 +96,7 @@ test('stage simulation agrees with the analytic small-signal response', () => {
   }
 });
 
-test("the game's electric chain is unchanged (stage list = the old node graph)", () => {
+test('甲 (the electric tone before 丁) is unchanged: stage list = the old node graph', () => {
   const o = RHYTHM_DISTORTION;
   const expected = [
     ['biquad', 'highpass', o.tightHz, 0.7], ['biquad', 'peaking', o.preMidHz, 0.8, o.preMidGain], ['gain', o.preGain],
@@ -104,16 +104,17 @@ test("the game's electric chain is unchanged (stage list = the old node graph)",
     ['biquad', 'peaking', o.mudHz, 1.0, o.mudGain], ['biquad', 'peaking', o.presenceHz, 0.9, o.presenceGain],
     ['biquad', 'lowpass', o.cabHz, 0.9], ['biquad', 'lowpass', o.cabHz * 1.25, 0.6], ['gain', o.level],
   ];
-  const actual = TONES.electric.stages.map(s => (s.kind === 'biquad' ? ['biquad', s.type, s.frequency, s.Q, ...(s.gain !== undefined ? [s.gain] : [])]
+  const actual = LEGACY_ELECTRIC.stages.map(s => (s.kind === 'biquad' ? ['biquad', s.type, s.frequency, s.Q, ...(s.gain !== undefined ? [s.gain] : [])]
     : s.kind === 'gain' ? ['gain', s.value] : ['shaper', s.curve.kind, s.curve.drive, s.curve.bias]));
   assert.deepEqual(actual, expected);
-  assert.equal(TONES.electric.stages[3].oversample, '4x');
-  assert.deepEqual(ampStages(RHYTHM_DISTORTION), TONES.electric.stages);
-  assert.equal(TONES.electric.releaseDepthDb, 90);
-  assert.ok(!TONES.electric.strumChoke && !TONES.electric.double && !TONES.electric.pick && !TONES.electric.string.maxSeconds);
+  assert.equal(LEGACY_ELECTRIC.stages[3].oversample, '4x');
+  assert.deepEqual(ampStages(RHYTHM_DISTORTION), LEGACY_ELECTRIC.stages);
+  assert.equal(LEGACY_ELECTRIC.releaseDepthDb, 90);
+  assert.ok(!LEGACY_ELECTRIC.strumChoke && !LEGACY_ELECTRIC.double && !LEGACY_ELECTRIC.pick && !LEGACY_ELECTRIC.string.maxSeconds);
+  assert.deepEqual(LAB_COMBOS.labA.stages, LEGACY_ELECTRIC.stages);
 });
 
-test('voice parameters for the game tones match the engine formula before the refactor', () => {
+test('voice parameters for the finger-following tones (steel, nylon, 甲) match the engine formula before the refactor', () => {
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const legacy = (tone, freq, velocity, position) => {
     const v = clamp(velocity, 0, 1);
@@ -131,7 +132,7 @@ test('voice parameters for the game tones match the engine formula before the re
     };
   };
   let count = 0;
-  for (const tone of Object.values(TONES)) {
+  for (const tone of [TONES.steel, TONES.nylon, LEGACY_ELECTRIC]) {
     for (const freq of [30, 82.4, 110, 440, 1200, 5000]) {
       for (const velocity of [0, 0.1, 0.6, 1, 1.5]) {
         for (const position of [0, 0.1, 0.5, 0.77, 1]) {

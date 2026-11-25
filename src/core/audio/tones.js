@@ -2,13 +2,15 @@
 // any instrument that plucks can use any tone. Each engine part (the rhythm part now, a lead part
 // later) builds its own chain instance from its tone, so a distorted tone never shares a clipper
 // with another part. Per-tone fields:
-//   voicing         'triad' or 'power' (root + fifth; the pitch snapper and the song map follow it)
+//   voicing         'triad', 'power' (root + fifth; the pitch snapper and the song map follow it) or
+//                   'auto' (the electric rig: power while overdrive or distortion is on, electric-rig.js)
 //   panWidth        scales the per-string stereo position (distortion sits in the centre)
 //   releaseDepthDb  how far a choked/released voice falls within its fade time, measured at the
 //                   voice; distorted tones need their drive on top of the audible drop
 //   chordChoke      seconds in which voices from the previous chord fade out on a chord change
 //                   (null = let them ring, as acoustic strings do)
 import { buildStages } from './stages.js';
+import { electricTone } from './electric-rig.js';
 
 // Old behaviour of every release: setTargetAtTime with τ = fade / 3, i.e. −26 dB at the fade time.
 const NATURAL_RELEASE_DB = 60 / Math.LN10;
@@ -100,19 +102,23 @@ export const TONES = {
     string: { t60: 2.2, damping: 0.5, brightness: 0.45 },
     createChain: ctx => bodyAndRoom(ctx, { bodyHz: 220, bodyGain: 4, airGain: -4, wet: 0.2, roomSeconds: 1.1 }),
   },
-  // Distorted rhythm guitar for rock: power chords, centred, short and dry so it does not smear
-  // into the song's wide guitar wall. 90 dB release depth = 40 dB audible drop + up to ~50 dB of
-  // drive and stacked voices before the clipper (checked in tests/instrument.test.mjs).
-  electric: {
-    id: 'electric',
-    voicing: 'power',
-    panWidth: 0.15,
-    releaseDepthDb: 90,
-    chordChoke: 0.08,
-    string: { t60: 1.3, damping: 0.3, brightness: 0.8 },
-    stages: ELECTRIC_STAGES,
-    createChain: ctx => buildStages(ctx, ELECTRIC_STAGES),
-  },
+  // Electric guitar: the tone lab's 丁 as a pedal rig (amp always on; overdrive and distortion from
+  // the pedalboard, 搖滾 = 丁 without one). See electric-rig.js and docs/設計說明.md 15.1.
+  electric: electricTone(),
+};
+
+// The electric tone before 丁 (tone lab 甲, labA): power chords, centred, short and dry; one soft
+// clipper at ~24 dB. 90 dB release depth = 40 dB audible drop + up to ~50 dB of drive and stacked
+// voices before the clipper (checked in tests/instrument.test.mjs).
+export const LEGACY_ELECTRIC = {
+  id: 'electric',
+  voicing: 'power',
+  panWidth: 0.15,
+  releaseDepthDb: 90,
+  chordChoke: 0.08,
+  string: { t60: 1.3, damping: 0.3, brightness: 0.8 },
+  stages: ELECTRIC_STAGES,
+  createChain: ctx => buildStages(ctx, ELECTRIC_STAGES),
 };
 
 export const TONE_ORDER = ['steel', 'nylon', 'electric'];

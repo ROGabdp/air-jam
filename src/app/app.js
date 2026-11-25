@@ -5,6 +5,7 @@ import { t, applyTranslations } from '../i18n/index.js';
 import { createAudioEngine, mixToMono } from '../core/audio/engine.js';
 import { TONES as GAME_TONES, TONE_ORDER } from '../core/audio/tones.js';
 import { LAB_COMBOS } from '../core/audio/tone-lab.js';
+import { toneVoicing } from '../core/audio/electric-rig.js';
 import { analyzeAsync, retime } from '../core/analysis/analysis.js';
 import { renderDemoSong, compareWithTruth } from '../core/song/demo-song.js';
 import { createSongMap } from '../core/game/song-map.js';
@@ -222,7 +223,7 @@ export function createApp() {
   // key-guarded when settings.keyGuard), the others the triads as analysed.
   function mapFor(analysis) {
     if (!analysis) return null;
-    if (TONES[settings.tone].voicing !== 'power') return createSongMap(analysis);
+    if (voicingNow() !== 'power') return createSongMap(analysis);
     const power = powerChordAnalysis(analysis, { guard: settings.keyGuard });
     console.info(`[Air Jam] power chords (key guard ${settings.keyGuard ? 'on' : 'off'}, ${power.guard.replacedBeats} beat(s) replaced): `
       + power.segments.map(s => s.name).join(' '));
@@ -238,10 +239,18 @@ export function createApp() {
     hud.setNext(song.map.nextChord(heard));
   }
 
+  // The electric tone plays power chords only while the pedalboard has drive engaged (清音: triads).
+  function voicingNow() { return toneVoicing(TONES[settings.tone], pedals?.model.snapshot() ?? null); }
+  pedals?.model.subscribe(() => {
+    if (voicingNow() === pitch.voicing) return;
+    pitch.setVoicing(voicingNow());
+    refreshMap();
+  });
+
   function setTone(id) {
     settings.tone = id;
     audio?.setTone(TONES[id]);
-    pitch.setVoicing(TONES[id].voicing);
+    pitch.setVoicing(voicingNow());
     refreshMap();
     refreshInfo();
   }
@@ -259,8 +268,9 @@ export function createApp() {
   function unlockAudio() {
     if (!audio) {
       audio = createAudioEngine(settings);
+      if (pedals) audio.applyPedals(pedals.model.snapshot());
       audio.setTone(TONES[settings.tone]);
-      pitch.setVoicing(TONES[settings.tone].voicing);
+      pitch.setVoicing(voicingNow());
     }
     audio.resume().catch(error => console.warn('[Air Jam] audio resume failed:', error));
   }

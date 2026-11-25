@@ -12,6 +12,9 @@ export const STANDARD_ORDER = ['wah', 'overdrive', 'distortion', AMP, 'chorus', 
 export const PEDAL_IDS = STANDARD_ORDER.filter(id => id !== AMP);
 export const MODES = ['simple', 'advanced'];
 export const MAX_SIMPLE_KNOBS = 2;
+// Pedals whose sound (DSP) exists. The others are kept in the model and drawn, but make no sound yet
+// (owner decision: staged later); snapshots carry `sound: false` for them so a view can say so.
+export const PEDALS_WITH_SOUND = ['overdrive', 'distortion'];
 
 const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 'dB', default: 0.67, simple: false };
 
@@ -43,8 +46,8 @@ export const PEDAL_TYPES = {
   distortion: {
     label: 'pedal.distortion', hue: 2, icon: 'distortion',
     knobs: [
-      { id: 'drive', label: 'pedal.knob.drive', min: 10, max: 40, unit: 'dB', default: 0.5, simple: true },
-      { id: 'tone', label: 'pedal.knob.mids', min: 0, max: 1, unit: '', default: 0.5, simple: true },
+      { id: 'drive', label: 'pedal.knob.drive', min: 10, max: 46, unit: 'dB', default: 0.5, simple: true },
+      { id: 'tone', label: 'pedal.knob.tone', min: 0, max: 1, unit: '', default: 0.5, simple: true },
       level,
     ],
   },
@@ -77,13 +80,15 @@ export const PEDAL_TYPES = {
   },
 };
 
-// Placeholder presets (names from the owner, contents to be replaced by what the tone lab picks).
-// Each lists the pedals that are on and the knobs that differ from their defaults.
+// Presets (names from the owner). Each lists the pedals that are on and the knobs that differ from
+// their defaults. Values: src/core/audio/electric-rig.js (搖滾 is the tone lab's 丁; 重金屬 goes past
+// it into the fuzz end of the distortion), measured with tools/tone-lab/measure.mjs. Pedals without
+// sound yet (PEDALS_WITH_SOUND) stay off in every preset.
 export const PRESETS = [
-  { id: 'clean', label: 'preset.clean', on: { reverb: { mix: 0.45 } } },
-  { id: 'crunch', label: 'preset.crunch', on: { overdrive: { drive: 0.45, tone: 0.55 }, reverb: { mix: 0.3 } } },
-  { id: 'rock', label: 'preset.rock', on: { overdrive: { drive: 0.3, tone: 0.5 }, distortion: { drive: 0.5, tone: 0.6 }, reverb: { mix: 0.25, size: 0 } } },
-  { id: 'metal', label: 'preset.metal', on: { overdrive: { drive: 0.15, tone: 0.6 }, distortion: { drive: 0.85, tone: 0.2 }, reverb: { mix: 0.15, size: 0 } } },
+  { id: 'clean', label: 'preset.clean', on: {} },
+  { id: 'crunch', label: 'preset.crunch', on: { overdrive: { drive: 0.65, tone: 0.6 } } },
+  { id: 'rock', label: 'preset.rock', on: { overdrive: { drive: 0.266, tone: 0.571 }, distortion: { drive: 0.491, tone: 0.5 } } },
+  { id: 'metal', label: 'preset.metal', on: { overdrive: { drive: 0.45, tone: 0.62 }, distortion: { drive: 0.9, tone: 0.58 } } },
 ];
 export const DEFAULT_PRESET = 'rock';
 
@@ -187,14 +192,15 @@ export function saveBoard(storage, board, key = STORAGE_KEY) {
 }
 
 // What the DSP needs: effective chain order (simple mode always uses the classic order), whether
-// levels are automatic, and every pedal's on/off with normalised and physical knob values.
+// levels are automatic, and every pedal's on/off with normalised and physical knob values. `sound`
+// says whether the pedal has DSP yet (the others are silent: a view can show them as coming soon).
 export function boardSnapshot(board) {
   const pedals = {};
   for (const id of PEDAL_IDS) {
     const { on, params } = board.pedals[id];
     const values = {};
     for (const knob of PEDAL_TYPES[id].knobs) values[knob.id] = knobValue(knob, params[knob.id]);
-    pedals[id] = { on, params: { ...params }, values };
+    pedals[id] = { on, sound: PEDALS_WITH_SOUND.includes(id), params: { ...params }, values };
   }
   const simple = board.mode === 'simple';
   return {

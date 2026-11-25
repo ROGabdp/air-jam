@@ -52,7 +52,7 @@ test('model: presets set pedals and knobs; any edit makes the board "custom"', (
     for (const id of PEDAL_IDS) assert.equal(model.isOn(id), !!preset.on[id], `${preset.id}: ${id}`);
   }
   model.applyPreset('metal');
-  assert.ok(close(model.param('distortion', 'drive'), 0.85));
+  assert.ok(close(model.param('distortion', 'drive'), PRESETS.find(p => p.id === 'metal').on.distortion.drive));
   model.toggle('chorus');
   assert.equal(model.preset, null);
   model.applyPreset('clean');
@@ -164,15 +164,18 @@ test('model: listeners get a snapshot and the change; macros keep the knobs\' of
   model.toggle('chorus');
   assert.equal(seen.length, 2);
 
-  model.applyPreset('rock');            // overdrive 0.3, distortion 0.5
+  model.applyPreset('rock');
+  const rock = PRESETS.find(p => p.id === 'rock').on;
+  const od0 = rock.overdrive.drive, dist0 = rock.distortion.drive, mean0 = (od0 + dist0) / 2;
   const base = model.macroBase('drive');
-  assert.ok(close(base.mean, 0.4));
-  model.setMacro('drive', 0.6, base);
-  assert.ok(close(model.param('overdrive', 'drive'), 0.5) && close(model.param('distortion', 'drive'), 0.7));
-  model.setMacro('drive', 0.95, base);   // distortion clamps at 1, overdrive keeps following
-  assert.ok(close(model.param('distortion', 'drive'), 1) && close(model.param('overdrive', 'drive'), 0.85));
-  model.setMacro('drive', 0.4, base);    // back to the start: no drift
-  assert.ok(close(model.param('overdrive', 'drive'), 0.3) && close(model.param('distortion', 'drive'), 0.5));
+  assert.ok(close(base.mean, mean0));
+  model.setMacro('drive', mean0 + 0.2, base);
+  assert.ok(close(model.param('overdrive', 'drive'), od0 + 0.2) && close(model.param('distortion', 'drive'), dist0 + 0.2));
+  const top = mean0 + (1 - dist0) + 0.05;   // distortion clamps at 1, overdrive keeps following
+  model.setMacro('drive', top, base);
+  assert.ok(close(model.param('distortion', 'drive'), 1) && close(model.param('overdrive', 'drive'), od0 + top - mean0));
+  model.setMacro('drive', mean0, base);    // back to the start: no drift
+  assert.ok(close(model.param('overdrive', 'drive'), od0) && close(model.param('distortion', 'drive'), dist0));
 });
 
 // ---------- gestures on synthetic landmarks ----------
