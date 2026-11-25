@@ -131,8 +131,8 @@ function boardRig(options = {}) {
   return { board, toasts, frame, wait, click, drag, find };
 }
 
-test('availability: wah, overdrive and distortion are usable; the others wait for their sound', () => {
-  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive', 'wah']);
+test('availability: wah, overdrive, distortion and delay are usable; the others wait for their sound', () => {
+  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['delay', 'distortion', 'overdrive', 'wah']);
 });
 
 test('availability: a dimmed pedal cannot be switched or turned; it says "coming soon"', () => {

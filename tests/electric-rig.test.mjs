@@ -76,8 +76,8 @@ test('mapping: drive knobs raise the rig drive monotonically; every number is fi
   return `drive range (both on) ${range.join(' → ')} dB; 丁 ${rigDriveDb(rigFromSnapshot(null)).toFixed(1)} dB`;
 });
 
-test('mapping: pedals without sound change nothing; wah, overdrive and distortion have DSP', () => {
-  assert.deepEqual(PEDALS_WITH_SOUND, ['wah', 'overdrive', 'distortion']);
+test('mapping: the post-effects pedals change nothing in the rig; wah, overdrive and distortion have DSP here', () => {
+  assert.deepEqual(PEDALS_WITH_SOUND, ['wah', 'overdrive', 'distortion', 'delay']);
   const model = createPedalModel();
   model.applyPreset('rock');
   const base = JSON.stringify(rigFromSnapshot(model.snapshot()));
