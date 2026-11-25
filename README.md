@@ -80,7 +80,7 @@ python -m http.server 8010
 
 ## 靈感來源
 
-- 一支示範「雙手捏出停在空中的弦、弦長決定音高」的 [Facebook Reel](https://www.facebook.com/reel/1320325243578615)，空中弦的玩法來自這支影片。（正式公開前會補上作者姓名。）
+- 一支示範「雙手捏出停在空中的弦、弦長決定音高」的 [Facebook Reel](https://www.facebook.com/reel/1320325243578615)，空中弦的玩法來自這支影片（作者姓名不詳，請以影片連結為準）。
 - 那支影片的靈感來源：Pat Metheny 的 42 弦「畢卡索吉他」（Pikasso guitar，Linda Manzer 製作）。
 - Casio CT-FS1 電子琴的 Feel Sync 功能：分析歌曲的和弦，讓人怎麼彈都合拍。Air Jam 的「和弦吸附」是受它啟發、自己重新實作的。
 
