@@ -10,6 +10,8 @@ export function createMouseInput(element, { onCommand }) {
   let cursor = null;
   let dragStart = null;
   let justMoved = true;
+  let pressPolled = false;     // a click shorter than a frame must still be seen pressed once
+  let releasePending = false;
   const history = [];
 
   const local = event => {
@@ -37,15 +39,18 @@ export function createMouseInput(element, { onCommand }) {
       if (!enabled || event.button !== 0) return;
       track(event);
       dragStart = { ...cursor };
+      pressPolled = false;
+      releasePending = false;
     },
     mousemove(event) { if (enabled) track(event); },
     mouseup(event) {
       if (!enabled || event.button !== 0) return;
       track(event);
+      if (!pressPolled) { releasePending = true; return; }
       dragStart = null;
       justMoved = true;
     },
-    mouseleave() { cursor = null; dragStart = null; history.length = 0; justMoved = true; },
+    mouseleave() { cursor = null; dragStart = null; releasePending = false; history.length = 0; justMoved = true; },
     contextmenu(event) {
       if (!enabled) return;
       event.preventDefault();
@@ -65,8 +70,11 @@ export function createMouseInput(element, { onCommand }) {
     poll() {
       if (!enabled || !cursor) { justMoved = true; return []; }
       if (dragStart) {
+        pressPolled = true;
+        const start = dragStart;
+        if (releasePending) { dragStart = null; releasePending = false; justMoved = true; }
         return [
-          hand('mouse-anchor', { pinching: true, tip: { ...dragStart }, pinchPoint: { ...dragStart }, center: { ...dragStart } }),
+          hand('mouse-anchor', { pinching: true, tip: { ...start }, pinchPoint: { ...start }, center: { ...start } }),
           hand('mouse-drag', { pinching: true }),
         ];
       }

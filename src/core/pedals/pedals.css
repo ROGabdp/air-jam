@@ -1,0 +1,11 @@
+/* Pedalboard (?pedals=1): loaded by src/core/pedals/dom.js. The footswitch zone itself is drawn
+   on the canvas; this only moves the bottom HUD above it and hides panels on the tuning screen. */
+/* The ready panel keeps its place above the help lines, as without the pedalboard. */
+body.pedals-on #ready { bottom: calc(var(--pedal-zone, 20vh) + 104px); }
+body.pedals-on #songInfo,
+body.pedals-on #status { bottom: calc(var(--pedal-zone, 20vh) + 10px); }
+body.pedals-on #help { bottom: calc(var(--pedal-zone, 20vh) + 8px); }
+body.pedals-on #ready .pedal-open { font-size: 15px; padding: 8px 20px; }
+body.pedal-tuning #ready,
+body.pedal-tuning #help,
+body.pedal-tuning #songInfo { display: none; }

@@ -18,6 +18,7 @@ import { drawHands } from '../core/hands/draw.js';
 import { loadHandLandmarker, startCamera, stopCamera, createHandTracker, createCoverMapper } from '../core/hands/tracker.js';
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from '../instruments/instrument.js';
 import { createHud, keyName } from './hud.js';
+import { attachPedalboard } from '../core/pedals/index.js';
 
 const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
 
@@ -26,6 +27,7 @@ export function createApp() {
   const query = new URLSearchParams(location.search);
   if (TONES[query.get('tone')]) settings.tone = query.get('tone');
   if (query.get('keyguard') === 'off') settings.keyGuard = false;
+  if (query.get('pedals') === '1') settings.pedals = true;
 
   applyTranslations();
   const hud = createHud();
@@ -81,8 +83,12 @@ export function createApp() {
   });
 
   const mouse = createMouseInput(stageElement, {
-    onCommand: command => { if (state === 'ready' || state === 'playing') instrument.onCommand?.(command); },
+    onCommand: command => { if ((state === 'ready' || state === 'playing') && !pedals?.blocks(command)) instrument.onCommand?.(command); },
   });
+  // Pedalboard UI behind ?pedals=1: it sees the hands first and withholds the ones it is using.
+  const pedals = settings.pedals
+    ? attachPedalboard({ settings, t, stage, element: stageElement, hud, getAudio: () => audio, mouseMode: () => mouseMode })
+    : null;
 
   // ---------- layout ----------
   function resize() {
@@ -407,7 +413,8 @@ export function createApp() {
     const onStage = state === 'ready' || state === 'playing';
 
     hands = onStage ? readHands(time) : [];
-    if (onStage) instrument.onHands(hands, time);
+    if (onStage) instrument.onHands(pedals ? pedals.route(hands, time, state) : hands, time);
+    else pedals?.route([], time, state);
 
     if (state === 'playing' && song.map) {
       const heard = Math.max(0, heardTime());
@@ -446,6 +453,7 @@ export function createApp() {
     if (onStage) {
       fx.drawPulse(g, stage.width, stage.height);
       instrument.draw(g);
+      pedals?.draw(g);
       drawHands(g, hands, { showSkeleton: settings.showHand });
       fx.draw(g);
     }
@@ -478,6 +486,7 @@ export function createApp() {
   window.addEventListener('keydown', event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toLowerCase();
+    if (pedals?.handleKey(key, state)) { event.preventDefault(); return; }
     if (key === 'm') setMouseMode(!mouseMode);
     else if (key === 'h') settings.showHand = !settings.showHand;
     else if (key === 'k') toggleMetronome();
@@ -504,7 +513,7 @@ export function createApp() {
 
   // Handle for the console and automated checks.
   return {
-    settings, instrument, scorer, pitch, fx,
+    settings, instrument, scorer, pitch, fx, pedals,
     setTone,
     // In-key root guard for power chords (open question for the owner): airJam.setKeyGuard(false)
     setKeyGuard(on) { settings.keyGuard = !!on; refreshMap(); },
