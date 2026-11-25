@@ -53,6 +53,13 @@ export class FakeAudioContext {
     return n;
   }
   createConvolver() { const n = new FakeNode(this, 'convolver'); n.buffer = null; return n; }
+  createConstantSource() {
+    const n = new FakeNode(this, 'constant', { offset: 1 });
+    n.startedAt = null;
+    n.start = (when = 0) => { n.startedAt = when; };
+    n.stop = () => {};
+    return n;
+  }
   createOscillator() { const n = new FakeBufferSource(this); n.kind = 'oscillator'; n.frequency = new FakeParam(this, 440); return n; }
   createBufferSource() { return new FakeBufferSource(this); }
   createBuffer(channels, length, sampleRate) {

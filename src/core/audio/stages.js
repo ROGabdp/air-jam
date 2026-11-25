@@ -9,10 +9,43 @@
 //   { kind: 'shaper', curve: { kind, drive, bias, n }, oversample? }   WaveShaperNode
 //   { kind: 'mix', branches: [{ weight, stages }] }  parallel branches summed, a GainNode per branch
 //                                                    (cross-fades: a pedal's on/off, the clipper blend)
+//   { kind: 'wahFilter', frequency, cents, qScale }  band-pass steered by the wah position w (0..1):
+//                                                    centre frequency·2^(cents·w/1200), Q qScale·4^(1−w)
+//   { kind: 'wahGain', compDb, compSlope }           gain of compDb + compSlope·w (dB): the wah's
+//                                                    loudness compensation
+// The wah position is not a stage number: it is one control signal per chain (a ConstantSourceNode
+// in the browser, fanned out to every wah stage through fixed curves; a number or a per-sample
+// track in Node), so it can move every frame without touching the rest of the chain (wah.js).
 // Any stage may carry an `id` (documentation only). A chain built from a list can later be moved to
 // another list of the same shape (same kinds, types, curves in the same places) with update(): the
 // numbers glide there with setTargetAtTime and nothing is rebuilt, so a ringing note is never cut.
 import { clipCurve, curveSlope, shapeSample } from './distortion.js';
+
+// Wah stages (see above). The compensation slope reaches the gain through an exponential curve
+// that spans ±WAH_COMP_SPAN dB, so the slope is a plain gain in front of the curve and can glide.
+export const WAH_COMP_SPAN = 30;
+export const WAH_Q_EXPONENT = 2;          // Q = qScale · 2^(WAH_Q_EXPONENT·(1 − w)) (Smith: 2^(2(1−w)+1))
+const fromDb = db => Math.pow(10, db / 20);
+const clamp01 = w => Math.max(0, Math.min(1, Number.isFinite(w) ? w : 0));
+const wahSlope = stage => Math.max(-WAH_COMP_SPAN, Math.min(WAH_COMP_SPAN, stage.compSlope));
+
+/** Centre frequency and Q (wahFilter) or linear gain (wahGain) of a wah stage at position w. */
+export function wahStageAt(stage, w) {
+  const x = clamp01(w);
+  if (stage.kind === 'wahFilter') {
+    return { frequency: stage.frequency * Math.pow(2, stage.cents * x / 1200), Q: stage.qScale * Math.pow(2, WAH_Q_EXPONENT * (1 - x)) };
+  }
+  if (stage.kind === 'wahGain') return { gain: fromDb(stage.compDb + wahSlope(stage) * x) };
+  throw new Error(`not a wah stage: ${stage.kind}`);
+}
+
+// Fixed curves from the control signal (WaveShaper input −1..1; the wah position uses 0..1).
+const CONTROL_POINTS = 1025;
+const controlCurve = f => Float32Array.from({ length: CONTROL_POINTS }, (_, i) => f(-1 + 2 * i / (CONTROL_POINTS - 1)));
+let qCurveCache = null, compCurveCache = null;
+export const wahQCurve = () => (qCurveCache ??= controlCurve(x => Math.pow(2, WAH_Q_EXPONENT * (1 - clamp01(x)))));
+export const wahCompCurve = () => (compCurveCache ??= controlCurve(x => fromDb(WAH_COMP_SPAN * x)));
+const wahPosition = (wah, i) => (typeof wah === 'number' ? wah : wah?.[i] ?? 0.5);
 
 /**
  * Normalised biquad coefficients as the Web Audio spec computes them (Audio EQ Cookbook with the
@@ -85,8 +118,18 @@ export function stageCurve(stage) {
  * @returns {{ input: AudioNode, output: AudioNode, nodes: AudioNode[], dispose(): void,
  *             update(stages: object[], o?: { when?: number, tau?: number }): void }}
  */
-export function buildStages(ctx, stages) {
+export function buildStages(ctx, stages, { wah = null } = {}) {
   const nodes = [];
+  // The wah position signal: shared from outside (one per part), or a fixed one of our own.
+  let control = wah;
+  const wahControl = () => {
+    if (control) return control;
+    const source = ctx.createConstantSource();
+    source.offset.value = 0.5;
+    source.start();
+    nodes.push(source);
+    return (control = source);
+  };
   // Every automatable AudioParam in the order stageNumbers() lists the values.
   const params = [];
 
@@ -112,6 +155,39 @@ export function buildStages(ctx, stages) {
         node = ctx.createWaveShaper();
         node.curve = stageCurve(stage);
         node.oversample = stage.oversample ?? '4x';
+        last.connect(node);
+      } else if (stage.kind === 'wahFilter') {
+        node = ctx.createBiquadFilter();
+        node.type = 'bandpass';
+        node.frequency.value = stage.frequency;
+        node.Q.value = 0;                       // all of Q comes from the control curve
+        const cents = ctx.createGain();
+        cents.gain.value = stage.cents;
+        const qShape = ctx.createWaveShaper();
+        qShape.curve = wahQCurve();
+        qShape.oversample = 'none';
+        const qScale = ctx.createGain();
+        qScale.gain.value = stage.qScale;
+        wahControl().connect(cents).connect(node.detune);
+        wahControl().connect(qShape);
+        qShape.connect(qScale).connect(node.Q);
+        nodes.push(cents, qShape, qScale);
+        params.push(node.frequency, cents.gain, qScale.gain);
+        last.connect(node);
+      } else if (stage.kind === 'wahGain') {
+        node = ctx.createGain();
+        node.gain.value = 0;                    // all of the gain comes from the control curve
+        const slope = ctx.createGain();
+        slope.gain.value = wahSlope(stage) / WAH_COMP_SPAN;
+        const shape = ctx.createWaveShaper();
+        shape.curve = wahCompCurve();
+        shape.oversample = 'none';
+        const offset = ctx.createGain();
+        offset.gain.value = fromDb(stage.compDb);
+        wahControl().connect(slope);
+        slope.connect(shape).connect(offset).connect(node.gain);
+        nodes.push(slope, shape, offset);
+        params.push(offset.gain, slope.gain);
         last.connect(node);
       } else if (stage.kind === 'mix') {
         node = ctx.createGain();
@@ -163,11 +239,11 @@ export function buildStages(ctx, stages) {
  * running, so its filters are warm when it fades in.
  * @returns {{ input, output, nodes, dispose(), update(stages, o?), switchTo(stages, o?) }}
  */
-export function buildSwitchableStages(ctx, stages) {
+export function buildSwitchableStages(ctx, stages, controls = {}) {
   const input = ctx.createGain();
   const output = ctx.createGain();
   const copies = [0, 1].map(i => {
-    const chain = buildStages(ctx, stages);
+    const chain = buildStages(ctx, stages, controls);
     const fader = ctx.createGain();
     fader.gain.value = i === 0 ? 1 : 0;
     input.connect(chain.input);
@@ -215,6 +291,8 @@ export function stageNumbers(stages, out = []) {
   for (const stage of stages) {
     if (stage.kind === 'biquad') out.push(stage.frequency, stage.Q, stage.gain);
     else if (stage.kind === 'gain') out.push(stage.value);
+    else if (stage.kind === 'wahFilter') out.push(stage.frequency, stage.cents, stage.qScale);
+    else if (stage.kind === 'wahGain') out.push(fromDb(stage.compDb), wahSlope(stage) / WAH_COMP_SPAN);
     else if (stage.kind === 'mix') {
       for (const branch of stage.branches) { out.push(branch.weight); stageNumbers(branch.stages, out); }
     }
@@ -225,15 +303,16 @@ export function stageNumbers(stages, out = []) {
 // Everything update() cannot glide (kinds, filter types, curves, oversampling), as a string.
 export function shapeOf(stages) {
   return JSON.stringify(stages, (key, value) => (
-    ['frequency', 'Q', 'gain', 'value', 'weight', 'id'].includes(key) && typeof value !== 'object' ? 0 : value));
+    ['frequency', 'Q', 'gain', 'value', 'weight', 'id', 'cents', 'qScale', 'compDb', 'compSlope'].includes(key) && typeof value !== 'object' ? 0 : value));
 }
 
 /**
  * Runs the stages over one channel (a copy; the input is not modified). The shaper is applied
  * without oversampling, so aliasing above ~5 kHz differs from the browser; levels and envelopes
- * match closely.
+ * match closely. `wah` is the wah position: a number, or a per-sample track (the band-pass then
+ * recomputes its coefficients every sample, as Chrome does for an a-rate parameter with an input).
  */
-export function processStages(stages, input, sampleRate) {
+export function processStages(stages, input, sampleRate, { wah = 0.5 } = {}) {
   let out = Float32Array.from(input);
   for (const stage of stages) {
     if (stage.kind === 'gain') {
@@ -250,12 +329,32 @@ export function processStages(stages, input, sampleRate) {
         x2 = x1; x1 = x; y2 = y1; y1 = y;
         out[i] = Math.abs(y) < 1e-30 ? 0 : y;
       }
+    } else if (stage.kind === 'wahFilter') {
+      const fixed = typeof wah === 'number';
+      let c = null, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < out.length; i++) {
+        if (!c || !fixed) {
+          const { frequency, Q } = wahStageAt(stage, wahPosition(wah, i));
+          c = biquadCoefficients('bandpass', frequency, Q, 0, sampleRate);
+        }
+        const x = out[i];
+        const y = c.b0 * x + c.b1 * x1 + c.b2 * x2 - c.a1 * y1 - c.a2 * y2;
+        x2 = x1; x1 = x; y2 = y1; y1 = y;
+        out[i] = Math.abs(y) < 1e-30 ? 0 : y;
+      }
+    } else if (stage.kind === 'wahGain') {
+      if (typeof wah === 'number') {
+        const gain = wahStageAt(stage, wah).gain;
+        for (let i = 0; i < out.length; i++) out[i] *= gain;
+      } else {
+        for (let i = 0; i < out.length; i++) out[i] *= wahStageAt(stage, wahPosition(wah, i)).gain;
+      }
     } else if (stage.kind === 'mix') {
       // Silent branches (weight 0: a settled cross-fade) are skipped.
       const sum = new Float32Array(out.length);
       for (const branch of stage.branches) {
         if (!branch.weight) continue;
-        const y = processStages(branch.stages, out, sampleRate);
+        const y = processStages(branch.stages, out, sampleRate, { wah });
         for (let i = 0; i < sum.length; i++) sum[i] += branch.weight * y[i];
       }
       out = sum;
@@ -268,17 +367,22 @@ export function processStages(stages, input, sampleRate) {
  * Small-signal magnitude response (linear) of the stages at each frequency: biquad magnitudes,
  * gains, and each shaper's slope at rest.
  */
-export function stagesResponse(stages, frequencies, sampleRate = 48000) {
+export function stagesResponse(stages, frequencies, sampleRate = 48000, { wah = 0.5 } = {}) {
   return frequencies.map(frequency => {
     let magnitude = 1;
     for (const stage of stages) {
       if (stage.kind === 'gain') magnitude *= Math.abs(stage.value);
+      else if (stage.kind === 'wahGain') magnitude *= wahStageAt(stage, wah).gain;
+      else if (stage.kind === 'wahFilter') {
+        const { frequency: f0, Q } = wahStageAt(stage, wah);
+        magnitude *= biquadMagnitude(biquadCoefficients('bandpass', f0, Q, 0, sampleRate), frequency, sampleRate);
+      }
       else if (stage.kind === 'shaper') magnitude *= curveSlope(stageCurve(stage));
       else if (stage.kind === 'biquad') {
         magnitude *= biquadMagnitude(biquadCoefficients(stage.type, stage.frequency, stage.Q ?? 1, stage.gain ?? 0, sampleRate), frequency, sampleRate);
       } else if (stage.kind === 'mix') {
         // Branch magnitudes summed (exact for a settled cross-fade, where one branch has weight 1).
-        magnitude *= stage.branches.reduce((sum, b) => sum + Math.abs(b.weight) * stagesResponse(b.stages, [frequency], sampleRate)[0], 0);
+        magnitude *= stage.branches.reduce((sum, b) => sum + Math.abs(b.weight) * stagesResponse(b.stages, [frequency], sampleRate, { wah })[0], 0);
       }
     }
     return magnitude;
@@ -290,6 +394,7 @@ export function stagesResponse(stages, frequencies, sampleRate = 48000) {
  * pushed into the last clipper (stages after it do not change how hard it clips). By default only
  * gains and shaper slopes count (the mid-band "total gain" the research and challenge docs quote:
  * the current electric tone is ~24 dB); with `frequency`, the filters at that frequency count too.
+ * The wah (a filter with its own loudness compensation) only counts with `frequency`, at w = 0.5.
  */
 export function driveDb(stages, { frequency = null, sampleRate = 48000 } = {}) {
   // A mix counts as a clipper when a live branch clips; its gain is then the weighted sum of its
@@ -300,7 +405,7 @@ export function driveDb(stages, { frequency = null, sampleRate = 48000 } = {}) {
   stages.forEach((stage, i) => { if (clips(stage)) last = i; });
   if (last < 0) return 0;
   const strip = list => list
-    .filter(s => frequency !== null || s.kind !== 'biquad')
+    .filter(s => frequency !== null || !['biquad', 'wahFilter', 'wahGain'].includes(s.kind))
     .map(s => (s.kind === 'mix' ? { ...s, branches: s.branches.map(b => ({ ...b, stages: strip(b.stages) })) } : s));
   const [magnitude] = stagesResponse(strip(stages.slice(0, last + 1)), [frequency ?? 1000], sampleRate);
   return 20 * Math.log10(Math.max(1e-12, magnitude));

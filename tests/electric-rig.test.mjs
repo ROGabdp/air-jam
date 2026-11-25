@@ -75,12 +75,12 @@ test('mapping: drive knobs raise the rig drive monotonically; every number is fi
   return `drive range (both on) ${range.join(' → ')} dB; 丁 ${rigDriveDb(rigFromSnapshot(null)).toFixed(1)} dB`;
 });
 
-test('mapping: pedals without sound change nothing; only overdrive and distortion have DSP', () => {
-  assert.deepEqual(PEDALS_WITH_SOUND, ['overdrive', 'distortion']);
+test('mapping: pedals without sound change nothing; wah, overdrive and distortion have DSP', () => {
+  assert.deepEqual(PEDALS_WITH_SOUND, ['wah', 'overdrive', 'distortion']);
   const model = createPedalModel();
   model.applyPreset('rock');
   const base = JSON.stringify(rigFromSnapshot(model.snapshot()));
-  for (const id of ['wah', 'chorus', 'delay', 'reverb']) {
+  for (const id of ['chorus', 'delay', 'reverb']) {
     model.toggle(id, true);
     for (const knob of PEDAL_TYPES[id].knobs) model.setParam(id, knob.id, 0.9);
   }
@@ -185,6 +185,8 @@ test('smoothing: a knob drag glides — small steps per 128-frame block', () => 
   const label = list => list.forEach(st => {
     if (st.kind === 'biquad') kinds.push('freq', 'q', 'db');
     else if (st.kind === 'gain') kinds.push('gain');
+    else if (st.kind === 'wahFilter') kinds.push('freq', 'cents', 'qscale');
+    else if (st.kind === 'wahGain') kinds.push('gain', 'slope');
     else if (st.kind === 'mix') st.branches.forEach(br => { kinds.push('weight'); label(br.stages); });
   });
   label(rigStages(rigFromSnapshot(null)));

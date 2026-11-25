@@ -43,9 +43,10 @@ const panGains = pan => {
  * @param {object} o.settings   SETTINGS
  * @param {number} [o.seed]
  * @param {number} [o.trim]
+ * @param {number|Float32Array} [o.wah]  wah position: fixed, or a per-sample track (wah.js simulateParam)
  * @returns {{ sampleRate: number, left: Float32Array, right: Float32Array }}
  */
-export function renderPart(tone, events, { duration, chokes = [], sampleRate = 48000, settings, seed = 1, trim = 1 }) {
+export function renderPart(tone, events, { duration, chokes = [], sampleRate = 48000, settings, seed = 1, trim = 1, wah = 0.5 }) {
   const length = Math.round(duration * sampleRate);
   const random = seeded(seed);
   const double = !!tone.double;
@@ -124,16 +125,16 @@ export function renderPart(tone, events, { duration, chokes = [], sampleRate = 4
 
   const left = new Float32Array(length), right = new Float32Array(length);
   if (double) {
-    const a = processStages(tone.stages, mainL, sampleRate);
-    const b = processStages(tone.double.stages, second, sampleRate);
+    const a = processStages(tone.stages, mainL, sampleRate, { wah });
+    const b = processStages(tone.double.stages, second, sampleRate, { wah });
     const [aL, aR] = panGains(-tone.double.pan), [bL, bR] = panGains(tone.double.pan);
     for (let i = 0; i < length; i++) {
       left[i] = (a[i] * aL + b[i] * bL) * trim;
       right[i] = (a[i] * aR + b[i] * bR) * trim;
     }
   } else {
-    const l = processStages(tone.stages, mainL, sampleRate);
-    const r = processStages(tone.stages, mainR, sampleRate);
+    const l = processStages(tone.stages, mainL, sampleRate, { wah });
+    const r = processStages(tone.stages, mainR, sampleRate, { wah });
     for (let i = 0; i < length; i++) { left[i] = l[i] * trim; right[i] = r[i] * trim; }
   }
   return { sampleRate, left, right };
@@ -204,8 +205,8 @@ export function renderMaster(strings, song, { sampleRate, settings }) {
  */
 export function modelRenderer(settings, sampleRate = 48000) {
   let seed = 1;
-  return async ({ tone, events, chokes = [], duration, song = null, master = false, strings = true, trim = 1 }) => {
-    const part = strings ? renderPart(tone, events, { duration, chokes, sampleRate, settings, seed: seed++, trim }) : null;
+  return async ({ tone, events, chokes = [], duration, song = null, master = false, strings = true, trim = 1, wah = 0.5 }) => {
+    const part = strings ? renderPart(tone, events, { duration, chokes, sampleRate, settings, seed: seed++, trim, wah }) : null;
     if (!master) return part;
     const songCut = song ? { left: song.left.subarray(0, part?.left.length ?? Math.round(duration * sampleRate)), right: song.right.subarray(0, part?.left.length ?? Math.round(duration * sampleRate)) } : null;
     const out = renderMaster(part, songCut, { sampleRate, settings });

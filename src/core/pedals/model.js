@@ -3,6 +3,8 @@
 // snapshots, the drawing side only reads snapshots and sends intents (toggle, setParam, …).
 // Knob values are stored normalised (0..1); knobValue() maps them to physical units for the DSP.
 
+import { WAH_RANGES, WAH_DEFAULT_KNOBS } from '../audio/wah.js';
+
 const clamp01 = v => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 
 export const STORAGE_KEY = 'airJam.pedalboard.v1';
@@ -14,24 +16,34 @@ export const MODES = ['simple', 'advanced'];
 export const MAX_SIMPLE_KNOBS = 2;
 // Pedals whose sound (DSP) exists. The others are kept in the model and drawn, but make no sound yet
 // (owner decision: staged later); snapshots carry `sound: false` for them so a view can say so.
-export const PEDALS_WITH_SOUND = ['overdrive', 'distortion'];
+export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion'];
 
 const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 'dB', default: 0.67, simple: false };
 
 /**
  * Knob: { id, label (i18n key), min, max, unit, curve ('linear' | 'log'), default (0..1),
- *         simple (shown in simple mode), steps? (i18n keys; value snaps to step / (n − 1)),
+ *         simple (shown in simple mode), advanced? (false: hidden in advanced mode, which has finer
+ *         knobs for it), steps? (i18n keys; value snaps to step / (n − 1)),
  *         toggle? (drawn as a button that cycles its steps), hidden? (not drawn as a knob) }
  * Physical ranges are starting points from docs/效果器研究.md 4.3; the tone lab decides the rest.
  */
 export const PEDAL_TYPES = {
+  // Wah (src/core/audio/wah.js): position from the edge strip (hand) or from strums / the beat
+  // (auto). Simple: 手控／自動 and 範圍 (sweep width around ~1 kHz, 0.5 = the classic 450 Hz–2.2 kHz);
+  // advanced: heel and toe frequencies, resonance, auto source, sensitivity, attack, decay, level.
   wah: {
     label: 'pedal.wah', hue: 285, icon: 'wah',
     knobs: [
       { id: 'position', label: 'pedal.knob.position', min: 0, max: 1, unit: '', default: 0.5, simple: false, hidden: true },
-      { id: 'range', label: 'pedal.knob.range', min: 350, max: 500, unit: 'Hz', default: 0.5, simple: true },
       { id: 'mode', label: 'pedal.knob.wahMode', min: 0, max: 1, unit: '', default: 1, simple: true, toggle: true, steps: ['pedal.step.hand', 'pedal.step.auto'] },
-      { id: 'resonance', label: 'pedal.knob.resonance', min: 0.5, max: 2, unit: '×', curve: 'log', default: 0.5, simple: false },
+      { id: 'range', label: 'pedal.knob.range', min: WAH_RANGES.octaves[0], max: WAH_RANGES.octaves[1], unit: 'oct', default: WAH_DEFAULT_KNOBS.range, simple: true, advanced: false },
+      { id: 'source', label: 'pedal.knob.wahSource', min: 0, max: 1, unit: '', default: 0, simple: false, toggle: true, steps: ['pedal.step.strum', 'pedal.step.beat'] },
+      { id: 'low', label: 'pedal.knob.low', min: WAH_RANGES.lowHz[0], max: WAH_RANGES.lowHz[1], unit: 'Hz', curve: 'log', default: WAH_DEFAULT_KNOBS.low, simple: false },
+      { id: 'high', label: 'pedal.knob.high', min: WAH_RANGES.highHz[0], max: WAH_RANGES.highHz[1], unit: 'Hz', curve: 'log', default: WAH_DEFAULT_KNOBS.high, simple: false },
+      { id: 'resonance', label: 'pedal.knob.resonance', min: WAH_RANGES.resonance[0], max: WAH_RANGES.resonance[1], unit: '×', curve: 'log', default: WAH_DEFAULT_KNOBS.resonance, simple: false },
+      { id: 'sensitivity', label: 'pedal.knob.sensitivity', min: 0, max: 100, unit: '%', default: WAH_DEFAULT_KNOBS.sensitivity, simple: false },
+      { id: 'attack', label: 'pedal.knob.attack', min: WAH_RANGES.attackMs[0], max: WAH_RANGES.attackMs[1], unit: 'ms', curve: 'log', default: WAH_DEFAULT_KNOBS.attack, simple: false },
+      { id: 'decay', label: 'pedal.knob.decay', min: WAH_RANGES.decayMs[0], max: WAH_RANGES.decayMs[1], unit: 'ms', curve: 'log', default: WAH_DEFAULT_KNOBS.decay, simple: false },
       level,
     ],
   },
@@ -102,7 +114,7 @@ export const knobOf = (pedalId, knobId) => PEDAL_TYPES[pedalId]?.knobs.find(k =>
 
 // Knobs drawn as knobs for a mode (the wah position lives on the edge strip, not on a knob).
 export function visibleKnobs(pedalId, mode) {
-  return PEDAL_TYPES[pedalId].knobs.filter(k => !k.hidden && (mode === 'advanced' || k.simple));
+  return PEDAL_TYPES[pedalId].knobs.filter(k => !k.hidden && (mode === 'advanced' ? k.advanced !== false : k.simple));
 }
 
 export function snapKnob(knob, value) {

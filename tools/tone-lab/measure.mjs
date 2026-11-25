@@ -1,10 +1,14 @@
-// node tools/tone-lab/measure.mjs [--set rig|lab|all] [--repeats 6] [--combo labC] [--seconds 16]
+// node tools/tone-lab/measure.mjs [--set rig|lab|all|wah] [--repeats 6] [--combo labC] [--seconds 16]
 // Offline measurements with the Node model (model.mjs), using the challenge doc's metrics
 // (docs/效果器_設計挑戰.md 4.3) plus crunch indicators. --set rig (default): the game's electric rig
 // with the pedalboard presets 清音／微破／搖滾／重金屬 and both ends of the drive range (overdrive and
 // distortion on, knobs at 0 / at 1), next to 甲 and 丁 for reference; --set lab: 甲乙丙丁. Mix metrics
 // use the owner's local songs (samples/s14.wav, s21.wav, 10–26 s; git-ignored, never committed)
 // when present, else the built-in demo song.
+// --set wah: the wah pedal (src/core/audio/wah.js): centre frequency, Q, compensation and the peak of
+// the small-signal response at each position; level with the wah on minus off by position (presets,
+// 範圍 0 / 0.5 / 1; five power chords); and peak / limiter reduction against the songs with the pedal
+// held at heel, middle, toe, in auto mode (跟刷弦) and in 跟拍子.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +18,11 @@ import { rigFromSnapshot, rigStages, electricTone, rigDriveDb } from '../../src/
 import { createPedalModel, PRESETS } from '../../src/core/pedals/model.js';
 import { renderDemoSong } from '../../src/core/song/demo-song.js';
 import { measureTone, TARGETS } from '../../src/lab/metrics.js';
-import { modelRenderer, seeded } from './model.mjs';
+import { modelRenderer, seeded, renderPart, renderMaster } from './model.mjs';
+import { wahFrequency, wahQ, createWahControl, simulateParam } from '../../src/core/audio/wah.js';
+import { stagesResponse } from '../../src/core/audio/stages.js';
+import { chug, A5, rms, peakOf } from '../../src/lab/metrics.js';
+import { wahLevelRows } from './calibrate-level.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2);
@@ -89,6 +97,87 @@ for (const [key, name, value] of [['driveMin', 'drive min', 0], ['driveMax', 'dr
 }
 const SETS = { rig: ['labA', 'labD', ...PRESETS.map(p => p.id), 'driveMin', 'driveMax'], lab: LAB_ORDER };
 SETS.all = [...new Set([...SETS.lab, ...SETS.rig])];
+
+if (set === 'wah') {
+  await measureWah();
+  process.exit(0);
+}
+
+async function measureWah() {
+  const started = Date.now();
+  const snapshotOf = (preset, params = {}, on = true) => {
+    const model = createPedalModel();
+    model.applyPreset(preset);
+    model.toggle('wah', on);
+    for (const [knob, value] of Object.entries(params)) model.setParam('wah', knob, value);
+    return model.snapshot();
+  };
+  // 1. Frequency response by position (default 範圍; the clean amp after it).
+  const rig = rigFromSnapshot(snapshotOf('clean', { mode: 0 }));
+  const stages = rigStages(rig);
+  const wahStages = stages[0].branches[1].stages;
+  const freqs = Array.from({ length: 600 }, (_, i) => 60 * Math.pow(2, i / 75));
+  const peakOfResponse = (list, w) => {
+    const r = stagesResponse(list, freqs, SAMPLE_RATE, { wah: w });
+    const i = r.indexOf(Math.max(...r));
+    return { hz: freqs[i], db: 20 * Math.log10(r[i]) };
+  };
+  const sweep = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1].map(w => {
+    const alone = peakOfResponse(wahStages, w), chain = peakOfResponse(stages, w);
+    return {
+      w, 'centre (Hz)': Math.round(wahFrequency(rig.wah, w)), Q: +wahQ(rig.wah, w).toFixed(2),
+      'compensation (dB)': +(rig.wah.compDb + rig.wah.compSlope * w).toFixed(1),
+      'wah peak (Hz / dB)': `${Math.round(alone.hz)} / ${alone.db.toFixed(1)}`,
+      'clean chain peak (Hz)': Math.round(chain.hz),
+    };
+  });
+  console.log(`Wah frequency response (Node, ${SAMPLE_RATE} Hz; default 範圍 = ${Math.round(rig.wah.lowHz)}–${Math.round(rig.wah.highHz)} Hz; `
+    + `compensation ${rig.wah.compDb.toFixed(1)} ${rig.wah.compSlope.toFixed(1)}·w dB)`);
+  console.table(sweep);
+
+  // 2. Level, wah on − off, by position.
+  const levels = [];
+  for (const preset of PRESETS) for (const range of [0, 0.5, 1]) {
+    const rows = wahLevelRows(on => snapshotOf(preset.id, { mode: 0, range }, on), { seconds: 3 });
+    levels.push({ preset: presetLabel[preset.id] ?? preset.id, '範圍': range, ...Object.fromEntries(rows.map((v, i) => [`w ${i / 4}`, +v.toFixed(1)])) });
+  }
+  console.log('Level with the wah on minus off (dB; eighth-note strums on E5 G5 A5 C5 D5, velocity 0.6, simple mode):');
+  console.table(levels);
+
+  // 3. Against the songs: peak and limiter, pedal held or moving.
+  const rows = [];
+  for (const song of songs) {
+    const events = chug(A5.slice(0, 4), { bpm: song.bpm, seconds, velocity: 0.6 });
+    for (const preset of ['clean', 'rock', 'metal']) {
+      const cases = [['off', null], ['heel', 0], ['middle', 0.5], ['toe', 1], ['auto', 'strum'], ['跟拍子', 'beat']];
+      const row = { song: song.name, preset: presetLabel[preset] };
+      for (const [label, how] of cases) {
+        const params = how === 'beat' ? { mode: 1, source: 1 } : how === 'strum' ? { mode: 1 } : { mode: 0 };
+        const snapshot = snapshotOf(preset, params, how !== null);
+        if (how === 'beat') snapshot.mode = 'advanced';
+        const r = rigFromSnapshot(snapshot);
+        let wah = typeof how === 'number' ? how : 0.5;
+        if (typeof how === 'string') {
+          const control = createWahControl();
+          const calls = [...control.configure(r.wah, 0)];
+          if (how === 'strum') for (const e of events) calls.push(...control.pluck(e.time, e.velocity));
+          else for (let t = 0; t < seconds; t += 1 / 60) calls.push(...control.frame(t, at => ({ beats: at * song.bpm / 60, beatSeconds: 60 / song.bpm })));
+          wah = simulateParam(calls, { sampleRate: SAMPLE_RATE, duration: seconds });
+        }
+        const part = renderPart(electricTone(r), events, { duration: seconds, settings: SETTINGS, sampleRate: SAMPLE_RATE, seed: 5, wah });
+        const mix = renderMaster(part, song.section, { sampleRate: SAMPLE_RATE, settings: SETTINGS });
+        let limiter = 0;
+        for (let i = SAMPLE_RATE; i < mix.reductionDb.length; i++) limiter = Math.min(limiter, mix.reductionDb[i]);
+        row[label] = `${peakOf(mix).toFixed(3)} / ${(-limiter).toFixed(1)} / ${(20 * Math.log10(rms(part, 0.5))).toFixed(1)}`;
+      }
+      rows.push(row);
+    }
+  }
+  console.log(`Against the songs (${songs.map(s => s.name).join(', ')}, ${seconds} s from 10 s; eighth-note A5 at the song's tempo): `
+    + 'mix peak / limiter reduction (dB) / guitar RMS (dB). Targets: peak ≤ 0.99, limiter ≲ 3 dB.');
+  console.table(rows);
+  console.log(`done in ${((Date.now() - started) / 1000).toFixed(1)} s. The Node model has no 4× oversampling and approximate compressors (model.mjs).`);
+}
 
 const ids = only ? [only] : SETS[set] ?? SETS.rig;
 const results = {};

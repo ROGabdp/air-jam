@@ -5,6 +5,7 @@ import { createPluck } from './karplus.js';
 import { releaseTimeConstant, ceilingCurve } from './distortion.js';
 import { voiceParams, t60For } from './voice-params.js';
 import { rigFromSnapshot, electricTone } from './electric-rig.js';
+import { createWahControl } from './wah.js';
 
 // Live contexts render only the first part of a pluck when it is played and the rest a moment later,
 // in small slices between frames (most of a long note is never heard: the next strum chokes it).
@@ -27,6 +28,8 @@ export function createAudioEngine(settings, { context = null, master = true, str
   const ctx = context ?? new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   // Electric rig settings from the pedalboard (null: no pedalboard, the rig is 丁 = 搖滾).
   let pedalSnapshot = null;
+  // Song beat position for the wah's 跟拍子 sweep: (songSeconds) => { beats, beatSeconds } | null.
+  let wahClock = null;
 
   // song ────────────────────────────────────────────────────► songGain ─┐
   // voices ► part bus ► part's tone chain ► trim ─┐                       │
@@ -70,7 +73,7 @@ export function createAudioEngine(settings, { context = null, master = true, str
       bus.gain.value = 0.3;
       const trim = ctx.createGain();
       trim.connect(stringGain);
-      p = { name, bus, trim, tone: null, chain: null, panner: null, double: null, lastPluckWhen: -Infinity };
+      p = { name, bus, trim, tone: null, chain: null, panner: null, double: null, lastPluckWhen: -Infinity, wah: null };
       parts.set(name, p);
     }
     return p;
@@ -154,6 +157,29 @@ export function createAudioEngine(settings, { context = null, master = true, str
   // The electric rig's tone for the current pedal settings (other tones are used as they are).
   const resolveTone = tone => (tone?.rig ? electricTone(rigFromSnapshot(pedalSnapshot)) : tone);
 
+  // ---------- wah position ----------
+  // One position signal per rig part (a ConstantSourceNode both takes' wah stages read, wah.js);
+  // the controller turns pedal settings, strums and frames into automation on it.
+  function partWah(p) {
+    if (!p.wah) {
+      const source = ctx.createConstantSource();
+      source.offset.value = 0.5;
+      source.start();
+      p.wah = { source, control: createWahControl({ strumWindow: settings.strumWindow / 1000 }) };
+    }
+    return p.wah;
+  }
+  function automateWah(p, calls) {
+    const param = p.wah?.source.offset;
+    if (!param) return;
+    for (const call of calls) {
+      if (call.type === 'cancel') param.cancelScheduledValues(call.time);
+      else if (call.type === 'target') param.setTargetAtTime(call.value, call.time, call.tau);
+      else if (call.type === 'set') param.setValueAtTime(call.value, call.time);
+    }
+  }
+  const songClock = () => (wahClock && song ? at => wahClock(at - song.startTime) : null);
+
   function setTone(next, partName = 'rhythm') {
     next = resolveTone(next);
     const p = part(partName);
@@ -173,7 +199,9 @@ export function createAudioEngine(settings, { context = null, master = true, str
       p.double = null;
     }
     p.tone = next;
-    p.chain = next.createChain(ctx);
+    const controls = next.rig ? { wah: partWah(p).source } : undefined;
+    if (next.rig) automateWah(p, p.wah.control.configure(rigFromSnapshot(pedalSnapshot).wah, ctx.currentTime));
+    p.chain = next.createChain(ctx, controls);
     p.bus.connect(p.chain.input);
     if (next.double && ctx.createStereoPanner) {
       // Double-tracking: a second, slightly different chain fed by its own take of every note.
@@ -182,7 +210,7 @@ export function createAudioEngine(settings, { context = null, master = true, str
       p.chain.output.connect(p.panner).connect(p.trim);
       const bus = ctx.createGain();
       bus.gain.value = 0.3;
-      const chain = next.double.createChain(ctx);
+      const chain = next.double.createChain(ctx, controls);
       const panner = ctx.createStereoPanner();
       panner.pan.value = next.double.pan;
       bus.connect(chain.input);
@@ -208,7 +236,9 @@ export function createAudioEngine(settings, { context = null, master = true, str
     // Knobs glide on the audible copy; anything that switches a pedal cross-fades to the other copy.
     const glide = change?.type === 'param';
     for (const p of parts.values()) {
-      if (!p.tone?.rig || p.rigKey === key) continue;
+      if (!p.tone?.rig) continue;
+      automateWah(p, partWah(p).control.configure(rig.wah, ctx.currentTime));
+      if (p.rigKey === key) continue;
       for (const [chain, stages] of [[p.chain, tone.stages], [p.double?.chain, tone.double.stages]]) {
         if (!chain) continue;
         if (glide) chain.update(stages, { tau: PEDAL_TAU.knob });
@@ -218,6 +248,15 @@ export function createAudioEngine(settings, { context = null, master = true, str
       p.rigKey = key;
     }
     return rig;
+  }
+
+  /**
+   * Every frame: the wah's 跟拍子 sweep follows the song's beat grid (set with setWahClock), or a
+   * free 100 BPM pulse when no song is playing.
+   */
+  function tickWah() {
+    const clock = songClock();
+    for (const p of parts.values()) if (p.tone?.rig && p.wah) automateWah(p, p.wah.control.frame(ctx.currentTime, clock));
   }
 
   // Level of a part after its chain (1 = as the tone is voiced). The tone lab level-matches with it.
@@ -312,6 +351,8 @@ export function createAudioEngine(settings, { context = null, master = true, str
       }
     }
     p.lastPluckWhen = Math.max(p.lastPluckWhen, when);
+    // Auto wah (跟刷弦): each strum opens the pedal (wah.js).
+    if (tone.rig && p.wah) automateWah(p, p.wah.control.pluck(when, velocity));
 
     if (p.double) {
       // Double-tracked: no per-string pan (the two chains are panned apart). The second take has
@@ -405,6 +446,11 @@ export function createAudioEngine(settings, { context = null, master = true, str
     get tone() { return parts.get('rhythm')?.tone ?? null; },
     // Electric rig numbers for the current pedal settings (for the console and measurements).
     get rig() { return rigFromSnapshot(pedalSnapshot); },
+    tickWah,
+    // (songSeconds) => { beats, beatSeconds } | null: the beat grid the wah's 跟拍子 sweep follows.
+    setWahClock(clock) { wahClock = typeof clock === 'function' ? clock : null; },
+    // The rhythm part's wah position param (console and tests).
+    get wahParam() { return parts.get('rhythm')?.wah?.source.offset ?? null; },
     pluck,
     chokeChord,
     applyVolumes,

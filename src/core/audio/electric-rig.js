@@ -11,13 +11,16 @@
 // and clipper branches do not have to line up in time). Clipping curves never change; drive is the
 // gain in front of them.
 //
-//   bus → [overdrive: bypass | booster] → tight HP, mid bump → [distortion: clean | hard | fuzz]
-//       → cabinet (HP 75, thump, mud, presence, tilt, two LPs, low restore) → level
+//   bus → [wah: bypass | band-pass + compensation] → [overdrive: bypass | booster] → tight HP, mid bump
+//       → [distortion: clean | hard | fuzz] → cabinet (HP 75, thump, mud, presence, tilt, two LPs,
+//       low restore) → level
 //
-// Wah, chorus, delay and reverb have no sound yet (owner decision: staged later); see
-// PEDALS_WITH_SOUND in src/core/pedals/model.js.
+// The wah's band-pass and compensation read the part's wah position signal (wah.js); its knobs
+// are stage numbers like any other. Chorus, delay and reverb have no sound yet (owner decision:
+// staged later); see PEDALS_WITH_SOUND in src/core/pedals/model.js.
 import { clipCurve, curveSlope, chokeDepthDb } from './distortion.js';
 import { driveDb, buildSwitchableStages } from './stages.js';
+import { wahSettings, wahCompensation } from './wah.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number.isFinite(v) ? v : lo));
 const fromDb = db => Math.pow(10, db / 20);
@@ -52,6 +55,7 @@ export const FUZZ_SLOPE = curveSlope(clipCurve(FUZZ_CURVE));
  * 18 dB past it, and over the top 30% of its knob blends into the fuzz clipper with up to 6 dB more.
  */
 export const RANGES = {
+  wah: { level: [-12, 6] },
   overdrive: { drive: [12, 36], tone: [-8, 6], level: [-12, 6] },
   distortion: { drive: [10, 46], tone: [0, 1], level: [-12, 6] },
 };
@@ -89,20 +93,50 @@ export const AUTO_LEVEL_DB = [
 ];
 const GRID = [0, 0.25, 0.5, 0.75, 1];
 
-// Linear position of x in GRID: [index, fraction].
-function gridAt(x) {
-  const v = clamp(x, 0, 1) * (GRID.length - 1);
-  const i = Math.min(GRID.length - 2, Math.floor(v));
+/**
+ * Output trim (dB) while the wah is on, by drive state, so the wah stays as loud as the bypass after
+ * the clippers (its own compensation matches the level going into them). Measured with
+ * tools/tone-lab/calibrate-level.mjs --wah-trim: minus the mean over w = 0, .25, .5, .75, 1 of
+ * (wah on − wah off), eighth-note strums on five power chords. Rows: overdrive off, then knob 0,
+ * .5, 1; columns: distortion off, then knob 0, .5, 1.
+ */
+export const WAH_TRIM_DB = [
+  [0, 0.1, 0.2, 0.4],
+  [-0.4, 0.1, 0.3, 0.7],
+  [-1.1, 0.2, 0.3, 0.8],
+  [-2, 0.3, 0.5, 0.9],
+];
+export const WAH_TRIM_GRID = [0, 0.5, 1];
+
+// Linear position of x in a grid of equally spaced knob points: [index, fraction].
+function gridAt(x, grid = GRID) {
+  const v = clamp(x, 0, 1) * (grid.length - 1);
+  const i = Math.min(grid.length - 2, Math.floor(v));
   return [i, v - i];
 }
 
 /** Auto-level (dB) for pedal states { on, knob } (knob = the drive knob, 0..1). */
-export function autoLevelDb(od, dist, table = AUTO_LEVEL_DB) {
-  const rows = od.on ? gridAt(od.knob) : null, cols = dist.on ? gridAt(dist.knob) : null;
+export function autoLevelDb(od, dist, table = AUTO_LEVEL_DB, grid = GRID) {
+  const rows = od.on ? gridAt(od.knob, grid) : null, cols = dist.on ? gridAt(dist.knob, grid) : null;
   const cell = (r, c) => table[r][c];
   const rowValue = c => (rows ? cell(1 + rows[0], c) * (1 - rows[1]) + cell(2 + rows[0], c) * rows[1] : cell(0, c));
   if (!cols) return rowValue(0);
   return rowValue(1 + cols[0]) * (1 - cols[1]) + rowValue(2 + cols[0]) * cols[1];
+}
+
+// Loudness compensation of the wah for its frequencies and Q (memoised: the strip moves the
+// position, not these, but snapshots arrive every frame while it moves).
+const wahLevelCache = new Map();
+function wahLevels(wah) {
+  const key = `${wah.lowHz.toFixed(3)}|${wah.highHz.toFixed(3)}|${wah.qScale.toFixed(4)}`;
+  let levels = wahLevelCache.get(key);
+  if (!levels) {
+    const { compDb, compSlope } = wahCompensation(wah);
+    levels = { compDb, compSlope };
+    if (wahLevelCache.size > 64) wahLevelCache.clear();
+    wahLevelCache.set(key, levels);
+  }
+  return levels;
 }
 
 /**
@@ -112,8 +146,9 @@ export function autoLevelDb(od, dist, table = AUTO_LEVEL_DB) {
  * @param {object|null} snapshot
  * @param {object} [o]
  * @param {number[][]} [o.levelTable]  auto-level table (calibration passes zeros)
+ * @param {number[][]} [o.wahTrim]     wah output trim table (calibration passes zeros)
  */
-export function rigFromSnapshot(snapshot, { levelTable = AUTO_LEVEL_DB } = {}) {
+export function rigFromSnapshot(snapshot, { levelTable = AUTO_LEVEL_DB, wahTrim = WAH_TRIM_DB } = {}) {
   const pedal = id => snapshot?.pedals?.[id] ?? null;
   const knob = (id, name, fallback) => clamp(pedal(id)?.params?.[name] ?? fallback, 0, 1);
   const scale = ([lo, hi], v) => lo + (hi - lo) * v;
@@ -126,6 +161,7 @@ export function rigFromSnapshot(snapshot, { levelTable = AUTO_LEVEL_DB } = {}) {
   const odTone = knob('overdrive', 'tone', DING_KNOBS.overdrive.tone);
   const distTone = knob('distortion', 'tone', 0.5);
   const fuzz = FUZZ.max * Math.pow(clamp((distDrive - FUZZ.from) / (1 - FUZZ.from), 0, 1), 1.5);
+  const wah = wahSettings(snapshot ? pedal('wah') : null, { advanced: snapshot?.mode === 'advanced' });
   // Clean amp: the mean of both tone knobs tilts it, so the brightness macro works in 清音 too.
   const tiltKnob = distOn ? distTone : (odTone + distTone) / 2;
   return {
@@ -141,9 +177,15 @@ export function rigFromSnapshot(snapshot, { levelTable = AUTO_LEVEL_DB } = {}) {
       fuzz,
       level: manual ? scale(RANGES.distortion.level, knob('distortion', 'level', 0.67)) : 0,
     },
+    wah: {
+      ...wah,
+      ...wahLevels(wah),
+      level: manual ? scale(RANGES.wah.level, knob('wah', 'level', 0.67)) : 0,
+    },
     tiltDb: TILT_DB * 2 * (tiltKnob - 0.5),
     lowRestoreDb: distOn ? LOW_RESTORE.distortion : odOn ? LOW_RESTORE.crunch : LOW_RESTORE.clean,
-    levelDb: autoLevelDb({ on: odOn, knob: odDrive }, { on: distOn, knob: distDrive }, levelTable),
+    levelDb: autoLevelDb({ on: odOn, knob: odDrive }, { on: distOn, knob: distDrive }, levelTable)
+      + (wah.on ? autoLevelDb({ on: odOn, knob: odDrive }, { on: distOn, knob: distDrive }, wahTrim, WAH_TRIM_GRID) : 0),
     engaged: odOn || distOn,
   };
 }
@@ -160,7 +202,19 @@ export function rigStages(rig, take = 'main') {
   const fuzzPre = fromDb(dist.drive + FUZZ.extraDb * (dist.fuzz / FUZZ.max)) / FUZZ_SLOPE * (double ? DOUBLE.driveScale : 1);
   const odWet = od.on ? fromDb(od.level) : 0;
   const distWet = dist.on ? fromDb(dist.level) : 0;
+  const wah = rig.wah ?? rigFromSnapshot(null).wah;
   return [
+    {
+      kind: 'mix', id: 'wah', branches: [
+        { id: 'wah.bypass', weight: wah.on ? 0 : 1, stages: [] },
+        {
+          id: 'wah.on', weight: wah.on ? fromDb(wah.level) : 0, stages: [
+            { kind: 'wahFilter', id: 'wah.filter', frequency: wah.lowHz, cents: 1200 * Math.log2(wah.highHz / wah.lowHz), qScale: wah.qScale },
+            { kind: 'wahGain', id: 'wah.comp', compDb: wah.compDb, compSlope: wah.compSlope },
+          ],
+        },
+      ],
+    },
     {
       kind: 'mix', id: 'overdrive', branches: [
         { id: 'overdrive.bypass', weight: od.on ? 0 : 1, stages: [] },
@@ -234,10 +288,11 @@ export function electricTone(rig = rigFromSnapshot(null), fields = {}) {
     pick: NEAR_BRIDGE,
     string: { ...LONG_STRING },
     stages,
-    createChain: ctx => buildSwitchableStages(ctx, stages),
+    // controls: { wah } (the part's wah position signal, shared by both takes).
+    createChain: (ctx, controls) => buildSwitchableStages(ctx, stages, controls),
     double: {
       pan: DOUBLE.pan, delay: DOUBLE.delay, detuneCents: DOUBLE.detuneCents, stages: doubleStages,
-      createChain: ctx => buildSwitchableStages(ctx, doubleStages),
+      createChain: (ctx, controls) => buildSwitchableStages(ctx, doubleStages, controls),
     },
     ...fields,
   };
