@@ -21,6 +21,7 @@ export function prefSpec({ tones, snapModes }) {
     showHand: bool,
     keyGuard: bool,
     pedals: bool,
+    handedness: v => v === 'right' || v === 'left',
     mouse: bool,
   };
 }

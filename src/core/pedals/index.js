@@ -4,7 +4,7 @@
 //   layout.js         geometry shared by hit testing and drawing (pure)
 //   pedalboard.js     controller: routes hands, applies gestures to the model
 //   draw.js           2D canvas drawing (replaceable by another view)
-//   audio-binding.js  the DSP seam (no effects connected yet) and the audition stub
+//   audio-binding.js  the DSP seam (engine.applyPedals) and the audition stub
 //   availability.js   which pedals can be used yet (the others are dimmed, "coming soon")
 //   dom.js, pedals.css  ready-panel button, HUD offsets
 import { createPedalboard } from './pedalboard.js';
@@ -20,6 +20,7 @@ export function attachPedalboard({ settings, t, stage, element, hud, getAudio, m
   });
   const dom = mountPedalDom({ settings, t, onOpen: () => board.openTuning() });
   board.onTuningChange(open => dom.setTuning(open));
+  board.onStripChange(side => dom.setStrip(side));
   bindPedalAudio(board.model, getAudio);
   // Shown by default; the player can hide it (settings.pedals). Hidden, the shell routes it nothing.
   board.setShown = on => {

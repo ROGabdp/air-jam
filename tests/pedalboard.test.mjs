@@ -301,8 +301,8 @@ const mouseDrag = (a, b) => [
 ];
 const camHand = (id, p, extra = {}) => ({ ...mouseHover(p), id, source: 'camera', ...extra });
 
-function rig({ withPedals = true } = {}) {
-  const settings = { ...SETTINGS };
+function rig({ withPedals = true, settings: overrides = {} } = {}) {
+  const settings = { ...SETTINGS, ...overrides };
   const storage = memoryStorage();
   // Every pedal available: these tests are about the mechanics (availability: tests/menu.test.mjs).
   const board = withPedals ? createPedalboard({ settings, t: k => k, stage: STAGE, storage, isAvailable: () => true }) : null;
@@ -481,28 +481,63 @@ test('keyboard backup: 4–9 toggle the pedals in zone order, W switches the wah
   assert.equal(board.model.isOn('wah'), true);
 });
 
-test('wah strip: hand height sets the position, the hand cannot pluck there, value kept on leaving', () => {
-  const { board, instrument, played, frame, wait, drag } = rig();
+for (const [handedness, side] of [['right', 'left'], ['left', 'right']]) {
+  test(`wah strip (${handedness}-handed → ${side} edge): hand height sets the position, no plucks there, value kept on leaving`, () => {
+    const { board, instrument, played, frame, wait, drag } = rig({ settings: { handedness } });
+    board.model.toggle('wah', true);
+    board.model.setParam('wah', 'mode', 1);   // auto: no strip yet
+    // A string reaching the screen edge, made while there is no strip.
+    drag({ x: 640, y: 300 }, { x: side === 'left' ? 2 : STAGE.width - 2, y: 300 });
+    assert.equal(instrument.strings.length, 1);
+    board.model.setParam('wah', 'mode', 0);   // hand control: the strip appears over the string's end
+    const strip = find(board, t => t.kind === 'strip');
+    assert.ok(strip, 'strip shown');
+    assert.equal(strip.rect.x === 0 ? 'left' : 'right', side, 'strip side follows handedness');
+    if (side === 'right') assert.equal(strip.rect.x + strip.rect.w, STAGE.width);
+    assert.ok(strip.rect.y >= 128, 'below the chord boxes / score row');
+    assert.ok(strip.rect.y + strip.rect.h <= zoneRect(STAGE, SETTINGS).y, 'above the footswitch zone');
+    const x = strip.rect.x + strip.rect.w / 2;
+    wait(0.5);
+    const count = played.length;
+    for (let i = 0; i <= 10; i++) frame([mouseHover({ x, y: 200 + i * 20 })]);
+    assert.equal(played.length, count, 'moving the mouse through the strip does not pluck');
+    const low = board.model.param('wah', 'position');
+    for (let i = 0; i <= 10; i++) frame([mouseHover({ x, y: 400 - i * 25 })]);
+    const high = board.model.param('wah', 'position');
+    assert.ok(high > low + 0.4, `${low} → ${high}`);
+    // A camera hand sweeping the strip up and down across the string: still no pluck.
+    for (let k = 0; k < 3; k++) {
+      for (let i = 0; i <= 12; i++) frame([camHand('cam-left', { x, y: 180 + i * 20 })]);
+      for (let i = 0; i <= 12; i++) frame([camHand('cam-left', { x, y: 420 - i * 20 })]);
+    }
+    assert.equal(played.length, count, 'a camera hand on the strip does not pluck');
+    frame([mouseHover({ x: 640, y: 150 })]);
+    wait(0.2);
+    const kept = board.model.param('wah', 'position');
+    wait(0.5);
+    assert.equal(board.model.param('wah', 'position'), kept, 'value held after the hand leaves');
+    // Control: with the strip hidden (auto mode) the same sweep does pluck the string.
+    board.model.setParam('wah', 'mode', 1);
+    for (let i = 0; i <= 12; i++) frame([camHand('cam-left', { x, y: 180 + i * 20 })]);
+    assert.ok(played.length > count, 'without the strip the sweep plucks (the test can see plucks)');
+    return `position ${low.toFixed(2)} → ${high.toFixed(2)}; strip x ${strip.rect.x}–${strip.rect.x + strip.rect.w}`;
+  });
+}
+
+test('wah strip: the page is told which edge it is on (corner text moves beside it), and when it hides', () => {
+  const { board, frame } = rig();
+  const sides = [];
+  board.onStripChange(side => sides.push(side));
+  frame([]);
   board.model.toggle('wah', true);
-  board.model.setParam('wah', 'mode', 0);   // hand control: the strip appears
-  const strip = find(board, t => t.kind === 'strip');
-  assert.ok(strip, 'strip shown');
-  const x = strip.rect.x + strip.rect.w / 2;
-  // A string crossing under the strip, made away from it.
-  drag({ x: 400, y: 300 }, { x: STAGE.width - 2, y: 300 });
-  assert.equal(instrument.strings.length, 1);
-  wait(0.5);
-  const count = played.length;
-  for (let i = 0; i <= 10; i++) frame([mouseHover({ x, y: 200 + i * 20 })]);
-  assert.equal(played.length, count, 'moving through the strip does not pluck');
-  const low = board.model.param('wah', 'position');
-  for (let i = 0; i <= 10; i++) frame([mouseHover({ x, y: 400 - i * 25 })]);
-  const high = board.model.param('wah', 'position');
-  assert.ok(high > low + 0.4, `${low} → ${high}`);
-  frame([mouseHover({ x: 300, y: 150 })]);
-  wait(0.2);
-  assert.equal(board.model.param('wah', 'position'), high);
-  return `position ${low.toFixed(2)} → ${high.toFixed(2)}`;
+  board.model.setParam('wah', 'mode', 0);
+  frame([]);
+  board.model.setParam('wah', 'mode', 1);
+  frame([]);
+  board.model.setParam('wah', 'mode', 0);
+  frame([]);
+  frame([], 'intro');
+  assert.deepEqual(sides, ['left', null, 'left', null]);
 });
 
 test('mouse: a click shorter than one frame is still seen pressed for one poll', () => {

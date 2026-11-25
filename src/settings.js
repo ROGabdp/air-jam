@@ -52,7 +52,8 @@ export const SETTINGS = {
   pedalLatch: 100,         // ms: on release a knob keeps its value from this long before (camera)
   pedalLockout: 400,       // ms after a tap during which further taps are ignored
   pedalSettle: 150,        // ms a camera hand must be tracked before its pinch can press anything
-  wahStripWidth: 0.12,     // wah strip at the right edge: fraction of the stage width
+  wahStripWidth: 0.12,     // wah strip: fraction of the stage width
+  handedness: 'right',     // strumming hand; the wah strip sits on the other hand's side (left for 'right')
 };
 
 export const SNAP_MODES = ['chord', 'scale', 'free'];

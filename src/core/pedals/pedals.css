@@ -9,3 +9,6 @@ body.pedals-on #ready .pedal-open { font-size: 15px; padding: 8px 20px; }
 body.pedal-tuning #ready,
 body.pedal-tuning #help,
 body.pedal-tuning #songInfo { display: none; }
+/* The wah strip (an edge of the stage, below the chord boxes): the corner text on that side moves beside it. */
+body.wah-strip-left #songInfo { left: calc(var(--wah-strip, 12vw) + 16px); }
+body.wah-strip-right #status { right: calc(var(--wah-strip, 12vw) + 16px); }

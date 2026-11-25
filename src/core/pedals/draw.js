@@ -176,9 +176,10 @@ function valueText(t, def, value) {
   const v = knobValue(def, value);
   if (def.unit === 'dB') return `${v > 0 ? '+' : ''}${v.toFixed(1)} dB`;
   if (def.unit === 'Hz') return v < 10 ? `${v.toFixed(2)} Hz` : `${Math.round(v)} Hz`;
-  if (def.unit === 'ms') return `${v.toFixed(1)} ms`;
+  if (def.unit === 'ms') return v < 20 ? `${v.toFixed(1)} ms` : `${Math.round(v)} ms`;
   if (def.unit === '%') return `${Math.round(v)}%`;
   if (def.unit === '×') return `×${v.toFixed(2)}`;
+  if (def.unit === 'oct') return t('pedal.unit.octaves', { v: v.toFixed(1) });
   return `${Math.round(value * 100)}`;
 }
 
@@ -335,7 +336,11 @@ export function drawWahStrip(g, view) {
   g.fillStyle = hsla(hue, 95, 70, auto ? 0.4 : 0.95);
   roundRect(g, strip.x + 14, y - 5, strip.w - 28, 10, 5);
   g.fill();
-  if (!auto) text(g, t('pedal.wahHint'), cx, strip.y + strip.h - 12, { size: 11, color: 'rgba(244,246,255,0.65)' });
+  if (!auto) {
+    text(g, t('pedal.wahBright'), cx, track.y0 - 6, { size: 11, color: 'rgba(244,246,255,0.6)' });
+    text(g, t('pedal.wahDark'), cx, track.y1 + 16, { size: 11, color: 'rgba(244,246,255,0.6)' });
+    text(g, t('pedal.wahHint'), cx, strip.y + strip.h - 8, { size: 11, color: 'rgba(244,246,255,0.65)' });
+  }
   g.restore();
   for (const target of view.targets) {
     if (target.kind === 'button' && target.action === 'wahMode') {

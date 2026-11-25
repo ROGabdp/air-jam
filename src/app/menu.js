@@ -13,10 +13,10 @@ const $ = id => document.getElementById(id);
  * @param {object} options.settings      for the pinch-tap thresholds
  * @param {() => object} options.getState
  *   { screen, tone, tones, toneName, snapMode, metronome, showHand, keyGuard, pedalsShown,
- *     mouseMode, tempo: { available, bpm, manual } }
+ *     handedness, mouseMode, tempo: { available, bpm, manual } }
  * @param {object} options.actions
  *   setTone(id), setSnapMode(mode), setMouseMode(bool), toggleHand(), setPedalsShown(bool),
- *   openTuning(), setKeyGuard(bool), changeSong(), openLab()
+ *   setHandedness('right' | 'left'), openTuning(), setKeyGuard(bool), changeSong(), openLab()
  */
 export function createMenu({ t, settings, getState, actions }) {
   const gear = $('gearButton');
@@ -62,6 +62,7 @@ export function createMenu({ t, settings, getState, actions }) {
     press(panel.querySelector('[data-menu=pedals]'), s.pedalsShown);
     panel.querySelector('[data-menu=tuning]').classList.toggle('dim', !s.pedalsShown || s.screen !== 'ready');
     press(panel.querySelector('[data-menu=hand]'), s.showHand);
+    for (const button of panel.querySelectorAll('[data-handedness]')) press(button, button.dataset.handedness === s.handedness);
     const guard = panel.querySelector('[data-menu=keyGuard]');
     press(guard, s.keyGuard);
     guard.textContent = `${t('menu.keyGuard')}：${t(s.keyGuard ? 'menu.on' : 'menu.off')}`;
@@ -95,6 +96,7 @@ export function createMenu({ t, settings, getState, actions }) {
     else if (button.dataset.menu) handlers[button.dataset.menu]?.();
     else if (button.dataset.mode) actions.setMouseMode(button.dataset.mode === 'mouse');
     else if (button.dataset.snap) actions.setSnapMode(button.dataset.snap);
+    else if (button.dataset.handedness) actions.setHandedness(button.dataset.handedness);
     else if (button.dataset.tone) actions.setTone(button.dataset.tone);
     refresh();
     // A mouse click must not leave focus on an in-game button: Space would press it again.

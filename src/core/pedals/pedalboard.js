@@ -9,7 +9,7 @@
 // position can pluck.
 import { createPedalModel, knobOf, PEDAL_TYPES, AMP } from './model.js';
 import { createPedalGestures, createLockout, createRegionGate, toPointers } from './gestures.js';
-import { zoneRect, zoneTargets, tuningTargets, hitTarget, inRect, wahLayout, wahPositionAt } from './layout.js';
+import { zoneRect, zoneTargets, tuningTargets, hitTarget, inRect, wahLayout, wahPositionAt, wahStripSide } from './layout.js';
 import { drawZone, drawWahStrip, drawTuning } from './draw.js';
 import { createAuditionStub } from './audio-binding.js';
 import { isPedalAvailable } from './availability.js';
@@ -28,6 +28,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
   let audition = createAuditionStub();
   let auditionRunning = false;
   let onTuningChange = () => {};
+  let onStripChange = () => {};
+  let stripShownAt = null;           // side the page was last told the strip is on (null: hidden)
   let time = 0;
   let visible = false;
   let zoneActive = false, stripActive = false;
@@ -105,7 +107,11 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     visible = gameState === 'ready' || gameState === 'playing';
     if (!visible || (tuningOpen && gameState !== 'ready')) {
       if (tuningOpen) closeTuning();
-      if (!visible) { gestures.reset(); zoneGate.reset(); stripGate.reset(); zoneActive = stripActive = false; hovered = []; return hands; }
+      if (!visible) {
+        gestures.reset(); zoneGate.reset(); stripGate.reset(); zoneActive = stripActive = false; hovered = [];
+        if (stripShownAt !== null) { stripShownAt = null; onStripChange(null); }
+        return hands;
+      }
     }
 
     const pointers = toPointers(hands);
@@ -128,6 +134,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
       stripActive = false;
     }
     zoneActive = inZone.size > 0;
+    const stripSide = !tuningOpen && wahStripShown() ? wahStripSide(settings) : null;
+    if (stripSide !== stripShownAt) { stripShownAt = stripSide; onStripChange(stripSide); }
 
     // Hover feedback: open hands over a target (helps aiming with the camera).
     hovered = pointers.filter(p => !p.pinching).map(p => hitTarget(targets, p.probe)).filter(x => x && x.kind !== 'zone' && x.kind !== 'strip');
@@ -232,6 +240,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     // The tone lab plugs its audition loop in here: { start(), stop(), running }.
     setAudition(source) { audition = source ?? createAuditionStub(); },
     onTuningChange(callback) { onTuningChange = callback; },
+    // The page moves its edge text beside the wah strip: callback(side: 'left' | 'right' | null).
+    onStripChange(callback) { onStripChange = callback; },
     // For tests and the console: the current targets in stage pixels.
     targets: () => targetsNow(),
     knob: knobOf,

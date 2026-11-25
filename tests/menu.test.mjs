@@ -7,6 +7,7 @@ import { createPrefs, prefSpec, loadPrefs, sanitizePrefs, urlOverrides, resolveP
 import { createHandButtons } from '../src/app/hand-buttons.js';
 import { PEDAL_AVAILABLE, isPedalAvailable, setPedalAvailability } from '../src/core/pedals/availability.js';
 import { createPedalboard } from '../src/core/pedals/pedalboard.js';
+import { wahStripSide, wahStripRect } from '../src/core/pedals/layout.js';
 import { createAirStrings } from '../src/instruments/air-strings/index.js';
 import { createPitchSnapper } from '../src/core/music/pitch-snap.js';
 import { SETTINGS, SNAP_MODES } from '../src/settings.js';
@@ -41,6 +42,23 @@ test('prefs: defaults without storage; a choice is remembered across a reload', 
   assert.equal(second.values.mouse, true);
   assert.equal(second.values.pedals, false);
   assert.equal(second.values.snapMode, 'chord', 'untouched settings keep their defaults');
+});
+
+test('prefs: handedness (慣用手) is remembered; it puts the wah strip on the other hand’s side', () => {
+  const storage = memoryStorage();
+  const prefs = createPrefs({ storage, spec, defaults: { ...DEFAULTS, handedness: 'right' }, query: new URLSearchParams(''), allTones: ALL_TONES });
+  assert.equal(prefs.values.handedness, 'right');
+  assert.equal(prefs.remember('handedness', 'both'), false, 'only right or left');
+  assert.equal(prefs.remember('handedness', 'left'), true);
+  const again = createPrefs({ storage, spec, defaults: { ...DEFAULTS, handedness: 'right' }, query: new URLSearchParams(''), allTones: ALL_TONES });
+  assert.equal(again.values.handedness, 'left');
+  assert.equal(SETTINGS.handedness, 'right', 'right-handed by default');
+  assert.equal(wahStripSide({ handedness: 'right' }), 'left', 'right-handed: strip on the left edge (the mirrored left hand)');
+  assert.equal(wahStripSide({ handedness: 'left' }), 'right');
+  const stage = { width: 1280, height: 720 };
+  const left = wahStripRect(stage, { ...SETTINGS, handedness: 'right' }), right = wahStripRect(stage, { ...SETTINGS, handedness: 'left' });
+  assert.equal(left.x, 0);
+  assert.equal(right.x + right.w, stage.width);
 });
 
 test('prefs: invalid, unknown and garbage stored values are ignored; broken storage never throws', () => {
@@ -113,8 +131,8 @@ function boardRig(options = {}) {
   return { board, toasts, frame, wait, click, drag, find };
 }
 
-test('availability: only overdrive and distortion are usable until their sound is connected', () => {
-  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive']);
+test('availability: wah, overdrive and distortion are usable; the others wait for their sound', () => {
+  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive', 'wah']);
 });
 
 test('availability: a dimmed pedal cannot be switched or turned; it says "coming soon"', () => {
@@ -137,7 +155,7 @@ test('availability: a dimmed pedal cannot be switched or turned; it says "coming
   assert.ok(board.model.param('distortion', 'drive') > d0 + 0.2, 'distortion knob still turns');
 });
 
-test('availability: keys 4–9 and W skip dimmed pedals; the wah strip stays hidden', () => {
+test('availability: keys 4–9 and W skip dimmed pedals; W switches the wah, whose strip shows in hand mode', () => {
   const { board, toasts, frame } = boardRig();
   const order = board.model.pedalOrder();
   for (let i = 0; i < order.length; i++) {
@@ -145,14 +163,27 @@ test('availability: keys 4–9 and W skip dimmed pedals; the wah strip stays hid
     assert.equal(board.handleKey(String(4 + i), 'playing'), true);
     assert.equal(board.model.isOn(order[i]), isPedalAvailable(order[i]) ? !before : before, order[i]);
   }
-  const mode = board.model.param('wah', 'mode');
-  assert.equal(board.handleKey('w', 'playing'), true);
-  assert.equal(board.model.param('wah', 'mode'), mode);
-  assert.ok(toasts.some(x => x.includes('pedal.wah')));
+  // The wah is available: W switches it between hand and auto (and the strip follows).
   board.model.toggle('wah', true);
-  board.model.setParam('wah', 'mode', 0);
+  board.model.setParam('wah', 'mode', 1);
+  assert.equal(board.handleKey('w', 'playing'), true);
+  assert.equal(board.model.param('wah', 'mode'), 0);
+  assert.ok(toasts.at(-1).includes('pedal.wahHand'), toasts.at(-1));
   frame([]);
-  assert.equal(board.targets().some(t => t.kind === 'strip'), false);
+  assert.equal(board.targets().some(t => t.kind === 'strip'), true, 'hand mode shows the strip');
+  board.handleKey('w', 'playing');
+  frame([]);
+  assert.equal(board.targets().some(t => t.kind === 'strip'), false, 'auto mode hides it');
+  // A pedal without sound: W only says "coming soon", and no strip appears.
+  const locked = boardRig({ isAvailable: id => id === 'overdrive' || id === 'distortion' });
+  const mode = locked.board.model.param('wah', 'mode');
+  assert.equal(locked.board.handleKey('w', 'playing'), true);
+  assert.equal(locked.board.model.param('wah', 'mode'), mode);
+  assert.ok(locked.toasts.some(x => x.includes('pedal.wah')));
+  locked.board.model.toggle('wah', true);
+  locked.board.model.setParam('wah', 'mode', 0);
+  locked.frame([]);
+  assert.equal(locked.board.targets().some(t => t.kind === 'strip'), false);
 });
 
 test('availability: the tuning screen locks dimmed pedals too; flipping the flag unlocks them', () => {

@@ -40,7 +40,7 @@ export function createApp() {
     spec: prefSpec({ tones: TONE_ORDER, snapModes: SNAP_MODES }),
     defaults: {
       tone: settings.tone, snapMode: settings.snapMode, metronome: settings.metronome, showHand: settings.showHand,
-      keyGuard: settings.keyGuard, pedals: settings.pedals, mouse: false,
+      keyGuard: settings.keyGuard, pedals: settings.pedals, handedness: settings.handedness, mouse: false,
     },
   });
   const { mouse: startInMouseMode, ...remembered } = prefs.values;
@@ -286,6 +286,14 @@ export function createApp() {
     if (!audio) {
       audio = createAudioEngine(settings);
       if (pedals) audio.applyPedals(pedals.model.snapshot());
+      // The wah's 跟拍子 sweep follows the song's beat grid (re-derived when the tempo is corrected).
+      audio.setWahClock(songSeconds => {
+        const map = song?.map;
+        if (!map || !(map.bpm > 0)) return null;
+        const beat = map.beatPhase(songSeconds);
+        // Counted from the bar line, so a sweep of 2 or 4 beats starts on a downbeat.
+        return beat.index < 0 ? null : { beats: beat.inBar + beat.phase, beatSeconds: 60 / map.bpm };
+      });
       audio.setTone(TONES[settings.tone]);
       pitch.setVoicing(voicingNow());
     }
@@ -475,6 +483,7 @@ export function createApp() {
     if (onStage) hud.setScore(scorer.state.score, scorer.state.combo);
     hud.setStatus(onStage ? statusText() : '');
 
+    audio?.tickWah();
     instrument.update(dt);
     fx.update(dt);
 
@@ -548,6 +557,13 @@ export function createApp() {
     refreshInfo();
   }
 
+  function chooseHandedness(side) {
+    if (side !== 'right' && side !== 'left') return;
+    settings.handedness = side;
+    prefs.remember('handedness', side);
+    hud.toast(t('pedal.wahHandHint', { side: t(side === 'right' ? 'pedal.side.left' : 'pedal.side.right') }), 2.5);
+  }
+
   function setPedalsShown(on) {
     settings.pedals = !!on;
     prefs.remember('pedals', settings.pedals);
@@ -573,6 +589,7 @@ export function createApp() {
       showHand: settings.showHand,
       keyGuard: settings.keyGuard,
       pedalsShown: settings.pedals,
+      handedness: settings.handedness,
       mouseMode,
       tempo: {
         available: !!song?.analysis,
@@ -586,6 +603,7 @@ export function createApp() {
       setMouseMode: chooseMouseMode,
       toggleHand,
       setPedalsShown,
+      setHandedness: chooseHandedness,
       openTuning,
       setKeyGuard(on) {
         setKeyGuard(on);

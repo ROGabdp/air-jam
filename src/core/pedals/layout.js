@@ -13,12 +13,22 @@ export function zoneRect(stage, settings) {
   return { x: 0, y: stage.height - h, w: stage.width, h };
 }
 
-// Wah strip: the right edge between the HUD and the footswitch zone.
+// The wah strip is for the hand that does not strum: a right-handed player's left hand, which the
+// mirrored video shows on the left of the screen. Left-handed players get it on the right.
+export const wahStripSide = settings => (settings.handedness === 'left' ? 'right' : 'left');
+
+// Below the HUD's top row (chord boxes on the left, score and settings on the right; fixed CSS
+// pixels, about 118 px tall) and above the footswitch zone. The page moves the song info / status
+// line beside it (dom.js), so nothing else sits on the strip.
+export const WAH_STRIP_TOP = 128;
+
+// Wah strip: one screen edge between the HUD and the footswitch zone.
 export function wahStripRect(stage, settings) {
-  const top = Math.min(stage.height * 0.16, 120);
-  const bottom = zoneRect(stage, settings).y - 34;   // clear of the status line above the zone
+  const top = WAH_STRIP_TOP;
+  const bottom = zoneRect(stage, settings).y - 34;
   const w = Math.round(stage.width * settings.wahStripWidth);
-  return { x: stage.width - w, y: top, w, h: Math.max(40, bottom - top) };
+  const x = wahStripSide(settings) === 'left' ? 0 : stage.width - w;
+  return { x, y: top, w, h: Math.max(40, bottom - top) };
 }
 
 function knobTarget(pedal, knob, model, cx, cy, r, rect) {
@@ -131,7 +141,7 @@ export function hitTarget(targets, point) {
 export function wahLayout(stage, settings) {
   const strip = wahStripRect(stage, settings);
   const button = { x: strip.x + 8, y: strip.y + 6, w: strip.w - 16, h: Math.min(40, strip.h * 0.25) };
-  const track = { y0: button.y + button.h + 14, y1: strip.y + strip.h - 26 };
+  const track = { y0: button.y + button.h + 18, y1: strip.y + strip.h - 36 };
   return { strip, button, track };
 }
 

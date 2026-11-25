@@ -2,7 +2,7 @@
 // without sound is drawn dimmed with "即將推出" and cannot be switched or turned (its stored
 // settings are kept). Flip an entry to true when its effect is connected to the audio engine.
 export const PEDAL_AVAILABLE = {
-  wah: false,
+  wah: true,
   overdrive: true,
   distortion: true,
   chorus: false,
