@@ -41,8 +41,9 @@ export const SETTINGS = {
   comboIdleBeats: 8,       // beats without a scored hit before the combo quietly resets
   maxSongMinutes: 15,      // longer files are refused (decoded audio is ~23 MB per stereo minute)
 
-  // Pedalboard UI (src/core/pedals/; on with ?pedals=1 until the owner approves). No effects DSP yet.
-  pedals: false,
+  // Pedalboard (src/core/pedals/): shown by default, the player can hide it (settings panel). Which
+  // pedals can be used yet: src/core/pedals/availability.js.
+  pedals: true,
   pedalZoneHeight: 0.2,    // footswitch zone: fraction of the stage height along the bottom
   pedalTapTime: 400,       // ms: pinch on → off within this is a tap (toggle / select)
   pedalTapMove: 0.5,       // palm sizes the pinch point may wander during a tap

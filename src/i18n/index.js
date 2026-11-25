@@ -1,7 +1,8 @@
 import zhHantBase from './zh-Hant.js';
 import zhHantPedals from './zh-Hant.pedals.js';
+import zhHantMenu from './zh-Hant.menu.js';
 
-const zhHant = { ...zhHantBase, ...zhHantPedals };
+const zhHant = { ...zhHantBase, ...zhHantPedals, ...zhHantMenu };
 
 const LOCALES = { 'zh-Hant': zhHant };
 let current = zhHant;

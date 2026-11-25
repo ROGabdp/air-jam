@@ -109,8 +109,10 @@ function drawIcon(g, icon, cx, cy, s, color) {
 }
 
 // ---------- building blocks ----------
-function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint }) {
+// soon: label for a pedal that cannot be used yet (drawn dimmed and off, with a badge).
+function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon }) {
   g.save();
+  if (soon) { on = false; g.globalAlpha = 0.42; }
   if (on) {
     g.globalCompositeOperation = 'lighter';
     const halo = g.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.55);
@@ -150,7 +152,23 @@ function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint }) {
   g.beginPath(); g.arc(lx, ly, lr, 0, TAU); g.fill();
   if (keyHint) text(g, keyHint, cx - r * 0.78, cy - r * 0.78, { size: 11, color: 'rgba(244,246,255,0.6)' });
   g.restore();
+  if (soon) {
+    const size = Math.max(10, Math.min(13, r * 0.26));
+    g.save();
+    g.font = `700 ${size}px ${FONT}`;
+    const w = g.measureText(soon).width + size * 1.2, h = size * 1.7;
+    roundRect(g, cx - w / 2, cy + r * 0.78 - h / 2, w, h, h / 2);
+    g.fillStyle = 'rgba(20, 24, 52, 0.92)';
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = hsla(hue, 60, 70, 0.6);
+    g.stroke();
+    g.restore();
+    text(g, soon, cx, cy + r * 0.78, { size, color: 'rgba(244,246,255,0.85)', outline: false, weight: 700 });
+  }
 }
+
+const soonOf = (view, pedal) => (view.available && !view.available(pedal) ? view.t('pedal.soon') : null);
 
 function valueText(t, def, value) {
   if (!def) return `${Math.round(value * 100)}`;
@@ -285,12 +303,12 @@ export function drawZone(g, view) {
       drawDisc(g, {
         cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(target.pedal), on: model.isOn(target.pedal),
         icon: PEDAL_TYPES[target.pedal].icon, label: t(PEDAL_TYPES[target.pedal].label),
-        hover: isHover(view, target), keyHint: String(target.index + 4),
+        hover: isHover(view, target), keyHint: String(target.index + 4), soon: soonOf(view, target.pedal),
       });
       drawFeedback(g, view, target);
     } else if (target.kind === 'knob') {
       drawKnob(g, t, { ...target, hue: hueOf(target.pedal), label: target.def.label, def: target.def,
-        active: isActive(view, target), hover: isHover(view, target), dim: !model.isOn(target.pedal) });
+        active: isActive(view, target), hover: isHover(view, target), dim: !model.isOn(target.pedal) || !!soonOf(view, target.pedal) });
     }
   }
 }
@@ -355,13 +373,13 @@ export function drawTuning(g, view) {
       drawFeedback(g, view, target);
     } else if (target.kind === 'switch') {
       drawDisc(g, { cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(target.pedal), on: model.isOn(target.pedal),
-        icon: PEDAL_TYPES[target.pedal].icon, label: t(PEDAL_TYPES[target.pedal].label), hover });
+        icon: PEDAL_TYPES[target.pedal].icon, label: t(PEDAL_TYPES[target.pedal].label), hover, soon: soonOf(view, target.pedal) });
       drawFeedback(g, view, target);
     } else if (target.kind === 'knob' && target.macro) {
       drawKnob(g, t, { ...target, hue: 20, label: MACROS[target.macro].label, def: null, active: isActive(view, target), hover });
     } else if (target.kind === 'knob') {
       drawKnob(g, t, { ...target, hue: hueOf(target.pedal), label: target.def.label, def: target.def,
-        active: isActive(view, target), hover, dim: !model.isOn(target.pedal) });
+        active: isActive(view, target), hover, dim: !model.isOn(target.pedal) || !!soonOf(view, target.pedal) });
       drawFeedback(g, view, target);
     } else if (target.kind === 'select') {
       const selected = ui.selected === target.pedal;
@@ -377,7 +395,7 @@ export function drawTuning(g, view) {
         g.restore();
       }
       drawDisc(g, { cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(target.pedal), on: isAmp || model.isOn(target.pedal),
-        icon: isAmp ? 'amp' : PEDAL_TYPES[target.pedal].icon, label: null, hover });
+        icon: isAmp ? 'amp' : PEDAL_TYPES[target.pedal].icon, label: null, hover, soon: isAmp ? null : soonOf(view, target.pedal) });
       text(g, t(isAmp ? 'pedal.amp' : PEDAL_TYPES[target.pedal].label), target.cx, target.cy + target.r + 16, { size: 13 });
       if (target.index > 0) {
         const prev = view.targets.find(x => x.kind === 'select' && x.index === target.index - 1);

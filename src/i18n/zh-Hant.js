@@ -6,9 +6,9 @@ export default {
   'intro.pick': '選一首我的歌',
   'intro.demo': '用內建示範曲',
   'intro.privacy': '音樂只在這台電腦的瀏覽器裡分析，鏡頭畫面也只在本機處理，都不會上傳。',
-  'intro.camera': '按下按鈕後瀏覽器會詢問鏡頭權限。沒有鏡頭？按 M 改用滑鼠模式。',
-  'intro.modeMouse': '目前是滑鼠模式（按 M 切回鏡頭）',
-  'intro.modeCamera': '目前是鏡頭模式（按 M 切到滑鼠）',
+  'intro.camera': '鏡頭模式選歌後瀏覽器會詢問鏡頭權限；沒有鏡頭就選「滑鼠」。',
+  'intro.modeMouse': '滑鼠模式：拖曳＝拉弦，滑過＝撥弦（M 鍵也能切換）',
+  'intro.modeCamera': '鏡頭模式：用雙手在空中彈（M 鍵也能切換）',
   'intro.instrument': '樂器：空中弦',
 
   'analyzing.title': '正在聽這首歌…',
@@ -89,7 +89,6 @@ export default {
   'hud.bpm': '{bpm} BPM',
   'hud.bpmManual': '{bpm} BPM（手動調整）',
 
-  'tempo.label': '拍子不對？',
   'tempo.half': '慢一半',
   'tempo.double': '快一倍',
   'tempo.slower': '÷1.5',
@@ -98,7 +97,6 @@ export default {
   'tempo.later': '拍點延後 ▶',
   'tempo.reset': '還原',
   'tempo.click': '節拍器',
-  'tempo.hint': '先開「節拍器」再開始演奏，聽滴答聲有沒有跟上歌。演奏中也能用按鍵調整（說明在畫面下方）。',
   'tempo.toastBpm': '速度改成 {bpm} BPM',
   'tempo.toastReset': '還原成自動分析的速度（{bpm} BPM）',
   'tempo.toastEarlier': '拍點往前移',
@@ -117,8 +115,6 @@ export default {
 
   'help.camera': '雙手捏住拉開＝拉弦　食指劃過＝撥弦　握拳停在弦上＝刪除　雙手握拳＝清空',
   'help.mouse': '拖曳＝拉弦　移動滑鼠穿過弦＝撥弦　右鍵＝刪除',
-  'help.keys': '1 2 3 吸附模式　T 音色　H 顯示手　M 滑鼠／鏡頭　Esc 結束',
-  'help.tempoKeys': '拍子：[ ] 慢一半／快一倍　; \' ÷1.5／×1.5　, . 拍點前後移　0 還原　K 節拍器',
 
   'judge.perfect': 'Perfect',
   'judge.good': 'Good',

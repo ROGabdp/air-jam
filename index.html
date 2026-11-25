@@ -26,6 +26,7 @@
       </div>
       <div class="beat-dots" id="beatDots"><span></span><span></span><span></span><span></span></div>
       <div class="hud-spacer"></div>
+      <button id="gearButton" class="gear secondary" type="button" aria-expanded="false" aria-controls="menuPanel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm8.2 4.7-1.9-.3a6.6 6.6 0 0 1-.6 1.5l1.1 1.6-1.6 1.6-1.6-1.1c-.5.3-1 .5-1.5.6l-.3 1.9h-2.3l-.3-1.9a6.6 6.6 0 0 1-1.5-.6l-1.6 1.1-1.6-1.6 1.1-1.6a6.6 6.6 0 0 1-.6-1.5l-1.9-.3v-2.3l1.9-.3c.1-.5.3-1 .6-1.5L4.5 7.3l1.6-1.6 1.6 1.1c.5-.3 1-.5 1.5-.6l.3-1.9h2.3l.3 1.9c.5.1 1 .3 1.5.6l1.6-1.1 1.6 1.6-1.1 1.6c.3.5.5 1 .6 1.5l1.9.3v2.3Z"/></svg><span data-i18n="menu.gear"></span></button>
       <div class="hud-box score">
         <div class="label" data-i18n="hud.score"></div>
         <div id="score">0</div>
@@ -41,31 +42,95 @@
 
   <div id="ready" hidden>
     <div class="ready-title" data-i18n="ready.title"></div>
-    <button id="startButton" data-i18n="ready.start"></button>
-    <div class="hint" data-i18n="ready.hint"></div>
-    <div class="tempo">
-      <span class="tempo-label" data-i18n="tempo.label"></span>
-      <button class="mini secondary" data-tempo="half" data-i18n="tempo.half"></button>
-      <button class="mini secondary" data-tempo="double" data-i18n="tempo.double"></button>
-      <button class="mini secondary" data-tempo="slower" data-i18n="tempo.slower"></button>
-      <button class="mini secondary" data-tempo="faster" data-i18n="tempo.faster"></button>
-      <button class="mini secondary" data-tempo="earlier" data-i18n="tempo.earlier"></button>
-      <button class="mini secondary" data-tempo="later" data-i18n="tempo.later"></button>
-      <button class="mini secondary" data-tempo="reset" data-i18n="tempo.reset"></button>
-      <button class="mini secondary" data-tempo="click" id="metronomeButton" aria-pressed="false" data-i18n="tempo.click"></button>
+    <div class="ready-buttons">
+      <button id="startButton" data-i18n="ready.start"></button>
+      <button id="settingsButton" class="secondary" type="button" data-menu="open" data-i18n="menu.open"></button>
     </div>
-    <div class="hint" data-i18n="tempo.hint"></div>
+    <div class="hint" data-i18n="ready.hint"></div>
+    <div class="hint" data-i18n="ready.settingsHint"></div>
   </div>
+
+  <!-- Settings panel (gear), src/app/menu.js. Buttons show their state; the keys in <kbd> still work. -->
+  <section id="menuPanel" class="menu-panel" hidden aria-labelledby="menuTitle">
+    <div class="menu-head">
+      <h3 id="menuTitle" data-i18n="menu.title"></h3>
+      <span class="menu-note" data-i18n="menu.saved"></span>
+    </div>
+    <div class="menu-cols">
+      <div class="menu-col">
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.tone"></span><kbd>T</kbd><span class="menu-extra" id="menuToneOther"></span></div>
+          <div class="menu-row" id="menuTones"></div>
+        </div>
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.snap"></span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></div>
+          <div class="menu-row">
+            <button class="mini secondary" type="button" data-snap="chord" data-i18n="menu.snap.chord"></button>
+            <button class="mini secondary" type="button" data-snap="scale" data-i18n="menu.snap.scale"></button>
+            <button class="mini secondary" type="button" data-snap="free" data-i18n="menu.snap.free"></button>
+          </div>
+        </div>
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.pedals"></span></div>
+          <div class="menu-row">
+            <button class="mini secondary" type="button" data-menu="pedals" aria-pressed="false" data-i18n="menu.pedalsShow"></button>
+            <button class="mini secondary" type="button" data-menu="tuning"><span data-i18n="menu.tuning"></span><kbd>P</kbd></button>
+          </div>
+        </div>
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.input"></span><kbd>M</kbd></div>
+          <div class="menu-row">
+            <button class="mini secondary" type="button" data-mode="camera" data-i18n="menu.input.camera"></button>
+            <button class="mini secondary" type="button" data-mode="mouse" data-i18n="menu.input.mouse"></button>
+            <button class="mini secondary" type="button" data-menu="hand" aria-pressed="false"><span data-i18n="menu.showHand"></span><kbd>H</kbd></button>
+          </div>
+        </div>
+      </div>
+      <div class="menu-col">
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.tempo"></span><span class="menu-extra" id="menuBpm"></span></div>
+          <div class="menu-grid">
+            <button class="mini secondary" type="button" data-tempo="click" id="metronomeButton" aria-pressed="false"><span data-i18n="tempo.click"></span><kbd>K</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="half"><span data-i18n="tempo.half"></span><kbd>[</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="double"><span data-i18n="tempo.double"></span><kbd>]</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="slower"><span data-i18n="tempo.slower"></span><kbd>;</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="faster"><span data-i18n="tempo.faster"></span><kbd>'</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="earlier"><span data-i18n="tempo.earlier"></span><kbd>,</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="later"><span data-i18n="tempo.later"></span><kbd>.</kbd></button>
+            <button class="mini secondary" type="button" data-tempo="reset"><span data-i18n="tempo.reset"></span><kbd>0</kbd></button>
+          </div>
+          <div class="menu-hint" data-i18n="menu.tempoHint"></div>
+        </div>
+        <div class="menu-group">
+          <div class="menu-label"><span data-i18n="menu.advanced"></span></div>
+          <div class="menu-row">
+            <button class="mini secondary" type="button" data-menu="keyGuard" aria-pressed="false" data-i18n="menu.keyGuard"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="menu-foot">
+      <button type="button" data-menu="close" data-i18n="menu.done"></button>
+      <button class="secondary" type="button" data-menu="changeSong" data-i18n="menu.changeSong"></button>
+      <button class="secondary" type="button" data-menu="lab" data-i18n="menu.lab"></button>
+    </div>
+  </section>
 
   <section id="intro" class="overlay">
     <h1><span data-i18n="intro.title"></span><small data-i18n="intro.subtitle"></small></h1>
     <p class="lead" data-i18n="intro.lead"></p>
+    <div class="mode-switch" role="group" aria-labelledby="modeLabel">
+      <span id="modeLabel" class="mode-label" data-i18n="intro.modeLabel"></span>
+      <button class="mini secondary" type="button" data-mode="camera" data-i18n="menu.input.camera"></button>
+      <button class="mini secondary" type="button" data-mode="mouse" data-i18n="menu.input.mouse"></button>
+    </div>
+    <p class="hint" id="modeHint"></p>
     <div class="buttons">
       <button id="pickButton" data-i18n="intro.pick"></button>
       <button id="demoButton" class="secondary" data-i18n="intro.demo"></button>
     </div>
     <input type="file" id="fileInput" accept="audio/*" hidden>
-    <p class="hint" id="modeHint"></p>
+    <button class="mini secondary intro-lab" type="button" data-menu="lab" data-i18n="intro.lab"></button>
     <p class="hint" data-i18n="intro.camera"></p>
     <p class="hint" data-i18n="intro.privacy"></p>
     <p class="message" id="introMessage"></p>

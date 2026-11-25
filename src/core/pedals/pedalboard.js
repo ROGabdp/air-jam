@@ -12,10 +12,11 @@ import { createPedalGestures, createLockout, createRegionGate, toPointers } from
 import { zoneRect, zoneTargets, tuningTargets, hitTarget, inRect, wahLayout, wahPositionAt } from './layout.js';
 import { drawZone, drawWahStrip, drawTuning } from './draw.js';
 import { createAuditionStub } from './audio-binding.js';
+import { isPedalAvailable } from './availability.js';
 
 const WHEEL_STEP = 0.0008;   // knob travel per wheel delta pixel
 
-export function createPedalboard({ settings, t, stage, storage = null, element = null, toast = () => {}, mouseMode = () => false }) {
+export function createPedalboard({ settings, t, stage, storage = null, element = null, toast = () => {}, mouseMode = () => false, isAvailable = isPedalAvailable }) {
   const model = createPedalModel({ storage });
   const gestures = createPedalGestures(settings);
   const lockout = createLockout(settings.pedalLockout);
@@ -33,7 +34,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
   let hovered = [];
   let lastToggle = null;               // { target, time }
 
-  const wahStripShown = () => model.isOn('wah') && model.param('wah', 'mode') < 0.5;
+  const wahStripShown = () => isAvailable('wah') && model.isOn('wah') && model.param('wah', 'mode') < 0.5;
+  const soon = id => toast(t('pedal.comingSoon', { name: t(PEDAL_TYPES[id].label) }));
 
   function targetsNow() {
     if (tuningOpen) return tuningTargets(stage, model, ui);
@@ -48,6 +50,10 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
 
   function hitTest(targets, point) {
     const target = hitTarget(targets, point);
+    // A pedal without sound yet: its switch and knobs only answer "coming soon".
+    if ((target?.kind === 'switch' || target?.kind === 'knob') && target.pedal && !isAvailable(target.pedal)) {
+      return { kind: 'locked', pedal: target.pedal, rect: target.rect, cx: target.cx, cy: target.cy, r: target.r };
+    }
     if (target?.kind === 'knob') target.value = target.macro ? model.macro(target.macro) : model.param(target.pedal, target.knob);
     return target;
   }
@@ -57,6 +63,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     switch (target.kind) {
       case 'switch': model.toggle(target.pedal); break;
       case 'select': ui.selected = target.pedal; break;
+      case 'locked': soon(target.pedal); break;
       case 'knob':
         if (target.def?.steps) model.cycle(target.pedal, target.knob);
         else return;              // a tap on a continuous knob does nothing
@@ -144,6 +151,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
       lockout: lockout.remaining(time), lastToggle,
       mouse: mouseMode(),
       audition: auditionRunning,
+      available: isAvailable,
     };
     if (tuningOpen) { drawTuning(g, view); return; }
     if (wahStripShown()) drawWahStrip(g, view);
@@ -184,11 +192,13 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     if (key >= '4' && key <= '9') {
       const pedal = model.pedalOrder()[Number(key) - 4];
       if (!pedal) return false;
+      if (!isAvailable(pedal)) { soon(pedal); return true; }
       const on = model.toggle(pedal);
       toast(t(on ? 'pedal.toastOn' : 'pedal.toastOff', { name: t(PEDAL_TYPES[pedal].label) }));
       return true;
     }
     if (key === 'w') {
+      if (!isAvailable('wah')) { soon('wah'); return true; }
       if (!model.isOn('wah')) model.toggle('wah', true);
       const auto = model.cycle('wah', 'mode') >= 0.5;
       toast(t(auto ? 'pedal.wahAuto' : 'pedal.wahHand'));
@@ -225,6 +235,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     // For tests and the console: the current targets in stage pixels.
     targets: () => targetsNow(),
     knob: knobOf,
+    isAvailable: id => isAvailable(id),
     dispose() { element?.removeEventListener('wheel', onWheel); },
   };
 }
