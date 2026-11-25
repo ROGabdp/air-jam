@@ -5,7 +5,7 @@ export const PEDAL_AVAILABLE = {
   wah: true,
   overdrive: true,
   distortion: true,
-  chorus: false,
+  chorus: true,
   delay: false,
   reverb: false,
 };
