@@ -70,3 +70,47 @@ export function ceilingCurve({ knee = 0.9, max = 0.99, samples = 4097 } = {}) {
   }
   return curve;
 }
+
+/**
+ * Harder clipping curve for a WaveShaperNode: y = f(k(x + b)) − f(k·b), f(u) = u / (1 + |u|ⁿ)^(1/n),
+ * normalised to ±1 at most. n ≈ 2 is close to tanh; n = 4 keeps the small-signal region straighter
+ * and bends into the ceiling later and more sharply (more "edge", still no hard corner).
+ * @param {number} drive  slope at the origin before normalisation (clamped to 0.01..100)
+ * @param {object} [o]
+ * @param {number} [o.n]        knee sharpness, clamped to 1..20
+ * @param {number} [o.bias]     0..0.3, kept inside the straight region (k·b ≤ 0.4)
+ * @param {number} [o.samples]  curve length (odd)
+ */
+export function hardClipCurve(drive, { n = 4, bias = 0.08, samples = 4097 } = {}) {
+  const k = Number.isFinite(drive) ? Math.max(0.01, Math.min(100, drive)) : drive > 0 ? 100 : 0.01;
+  const p = Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 4;
+  const b = Math.max(0, Math.min(0.3, Number.isFinite(bias) ? bias : 0, 0.4 / k));
+  const f = u => u / Math.pow(1 + Math.pow(Math.abs(u), p), 1 / p);
+  const count = Math.max(3, samples | 1);
+  const curve = new Float32Array(count);
+  const offset = f(k * b);
+  let peak = 0;
+  for (let i = 0; i < count; i++) {
+    const x = (i / (count - 1)) * 2 - 1;
+    curve[i] = f(k * (x + b)) - offset;
+    peak = Math.max(peak, Math.abs(curve[i]));
+  }
+  for (let i = 0; i < count; i++) curve[i] /= peak;
+  return curve;
+}
+
+// Curve for a shaper stage description { kind: 'tanh' | 'hard', drive, bias, n }.
+export function clipCurve({ kind = 'tanh', drive, bias = 0, n = 4 }) {
+  return kind === 'hard' ? hardClipCurve(drive, { n, bias }) : distortionCurve(drive, { bias });
+}
+
+/**
+ * Release depth (dB, measured at the voice) for a distorted chain: the audible drop wanted at the
+ * output, plus the chain's small-signal gain (the clipper turns that much input decay into almost
+ * no output decay), plus a margin for stacked voices and velocity (8 strings at full velocity sit
+ * up to ~26 dB above one quiet string). 24 dB of gain gives the 90 dB the current electric tone uses.
+ */
+export function chokeDepthDb(gainDb, { audibleDb = 40, stackDb = 26 } = {}) {
+  const gain = Number.isFinite(gainDb) ? Math.max(0, gainDb) : 0;
+  return audibleDb + gain + stackDb;
+}

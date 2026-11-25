@@ -3,6 +3,7 @@
 // timed on AudioContext.currentTime.
 import { renderPluck } from './karplus.js';
 import { releaseTimeConstant, ceilingCurve } from './distortion.js';
+import { voiceParams, t60For } from './voice-params.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const pitchClassOf = freq => ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12) + 12) % 12;
@@ -11,14 +12,18 @@ const pitchClassOf = freq => ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12)
  * @param settings SETTINGS
  * @param {object} [o]
  * @param {BaseAudioContext} [o.context]  e.g. an OfflineAudioContext for measurements
+ * @param {boolean} [o.master]  false: strings and song go straight to the output, without the glue
+ *                              compressor, limiter and ceiling (to measure a tone chain on its own)
  */
-export function createAudioEngine(settings, { context = null } = {}) {
+export function createAudioEngine(settings, { context = null, master = true } = {}) {
   const ctx = context ?? new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
 
-  // song ───────────────────────────────────────────────► songGain ─┐
-  // voices ► part bus ► part's tone chain ─┐                         │
-  //   (one part per role: 'rhythm' now,    ├► stringGain ► glue comp ─┴► limiter ► ceiling ► destination
-  //    a 'lead' part later)               ─┘
+  // song ────────────────────────────────────────────────────► songGain ─┐
+  // voices ► part bus ► part's tone chain ► trim ─┐                       │
+  //   (one part per role: 'rhythm' now,           ├► stringGain ► glue ──┴► limiter ► ceiling ► destination
+  //    a 'lead' part later; the tone lab adds    ─┘
+  //    one part per combo)
+  // A tone with `double` gets a second bus and chain in its part (double-tracking), panned apart.
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -2; limiter.knee.value = 0; limiter.ratio.value = 20;
   limiter.attack.value = 0.002; limiter.release.value = 0.12;
@@ -30,14 +35,14 @@ export function createAudioEngine(settings, { context = null } = {}) {
   limiter.connect(ceiling).connect(ctx.destination);
 
   const songGain = ctx.createGain();
-  songGain.connect(limiter);
+  songGain.connect(master ? limiter : ctx.destination);
 
   const glue = ctx.createDynamicsCompressor();
   glue.threshold.value = -16; glue.knee.value = 10; glue.ratio.value = 5;
   glue.attack.value = 0.004; glue.release.value = 0.18;
   glue.connect(limiter);
   const stringGain = ctx.createGain();
-  stringGain.connect(glue);
+  stringGain.connect(master ? glue : ctx.destination);
 
   function applyVolumes() {
     songGain.gain.value = clamp(settings.songVolume, 0, 1) * 0.85;
@@ -53,7 +58,9 @@ export function createAudioEngine(settings, { context = null } = {}) {
     if (!p) {
       const bus = ctx.createGain();
       bus.gain.value = 0.3;
-      p = { name, bus, tone: null, chain: null };
+      const trim = ctx.createGain();
+      trim.connect(stringGain);
+      p = { name, bus, trim, tone: null, chain: null, panner: null, double: null, lastPluckWhen: -Infinity };
       parts.set(name, p);
     }
     return p;
@@ -65,9 +72,13 @@ export function createAudioEngine(settings, { context = null } = {}) {
     const from = Math.max(when, voice.when);
     voice.released = true;
     const tau = releaseTimeConstant(fadeSeconds, voice.depthDb);
-    voice.gain.gain.cancelScheduledValues(from);
-    voice.gain.gain.setTargetAtTime(0, from, tau);
-    try { voice.source.stop(from + Math.max(fadeSeconds * 1.5, tau * 7)); } catch { /* already stopped */ }
+    for (const gain of voice.gains) {
+      gain.gain.cancelScheduledValues(from);
+      gain.gain.setTargetAtTime(0, from, tau);
+    }
+    for (const source of voice.sources) {
+      try { source.stop(from + Math.max(fadeSeconds * 1.5, tau * 7)); } catch { /* already stopped */ }
+    }
   }
 
   function setTone(next, partName = 'rhythm') {
@@ -77,10 +88,60 @@ export function createAudioEngine(settings, { context = null } = {}) {
     p.bus.disconnect();
     p.chain?.output.disconnect();
     p.chain?.dispose();
+    p.panner?.disconnect();
+    p.panner = null;
+    if (p.double) {
+      p.double.bus.disconnect();
+      p.double.chain.output.disconnect();
+      p.double.chain.dispose();
+      p.double.panner.disconnect();
+      p.double = null;
+    }
     p.tone = next;
     p.chain = next.createChain(ctx);
     p.bus.connect(p.chain.input);
-    p.chain.output.connect(stringGain);
+    if (next.double && ctx.createStereoPanner) {
+      // Double-tracking: a second, slightly different chain fed by its own take of every note.
+      p.panner = ctx.createStereoPanner();
+      p.panner.pan.value = -next.double.pan;
+      p.chain.output.connect(p.panner).connect(p.trim);
+      const bus = ctx.createGain();
+      bus.gain.value = 0.3;
+      const chain = next.double.createChain(ctx);
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = next.double.pan;
+      bus.connect(chain.input);
+      chain.output.connect(panner).connect(p.trim);
+      p.double = { bus, chain, panner };
+    } else {
+      p.chain.output.connect(p.trim);
+    }
+  }
+
+  // Level of a part after its chain (1 = as the tone is voiced). The tone lab level-matches with it.
+  function setTrim(gain, partName = 'rhythm', { smooth = true } = {}) {
+    const p = part(partName);
+    p.trim.gain.cancelScheduledValues(ctx.currentTime);
+    if (smooth) p.trim.gain.setTargetAtTime(Math.max(0, gain), ctx.currentTime, 0.01);
+    else p.trim.gain.value = Math.max(0, gain);
+  }
+
+  /**
+   * Fades every voice of a part within `fadeSeconds`; voices scheduled to start after `when` are
+   * dropped without sounding. Used when another part takes over (the tone lab's combo switch).
+   */
+  function releasePart(partName, fadeSeconds = 0.03, when = ctx.currentTime) {
+    for (const voice of voices) {
+      if (voice.part !== partName || voice.released) continue;
+      if (voice.when > when) {
+        voice.released = true;
+        for (const source of voice.sources) { try { source.stop(); } catch { /* already stopped */ } }
+      } else {
+        release(voice, fadeSeconds, when);
+      }
+    }
+    const p = parts.get(partName);
+    if (p) p.lastPluckWhen = -Infinity;
   }
 
   /**
@@ -104,12 +165,6 @@ export function createAudioEngine(settings, { context = null } = {}) {
     return count;
   }
 
-  // Decay shortens with pitch like a real string; settings.decay scales it (0.996 = neutral).
-  function t60For(freq, tone) {
-    const sustain = clamp(0.004 / Math.max(1e-4, 1 - settings.decay), 0.2, 3);
-    return clamp(tone.string.t60 * sustain * Math.pow(130 / freq, 0.45), 0.4, 6);
-  }
-
   /**
    * @param {object} o
    * @param {number} o.freq
@@ -124,37 +179,54 @@ export function createAudioEngine(settings, { context = null } = {}) {
     const p = part(partName);
     const tone = p.tone;
     if (!tone) return;
-    const v = clamp(velocity, 0, 1);
-    const edge = Math.min(1, Math.abs(position - 0.5) * 2);
-    const data = renderPluck({
-      freq: clamp(freq, 40, 4000),
-      sampleRate: ctx.sampleRate,
-      t60: t60For(freq, tone),
-      damping: tone.string.damping * clamp(Math.sqrt(330 / freq), 0.3, 1),
-      brightness: clamp(tone.string.brightness * (0.3 + 0.5 * edge + 0.3 * v), 0.05, 1),
-      pickPosition: clamp(0.5 - 0.42 * edge, 0.06, 0.5),
-    });
-    const buffer = ctx.createBuffer(1, data.length, ctx.sampleRate);
-    buffer.getChannelData(0).set(data);
-
     const when = ctx.currentTime + delay;
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    const gain = ctx.createGain();
-    gain.gain.value = 0.22 + 0.78 * v * v;
-    source.connect(gain);
-    let panner = null;
-    if (ctx.createStereoPanner) {
-      panner = ctx.createStereoPanner();
-      panner.pan.value = clamp(pan * (tone.panWidth ?? 1), -1, 1);
-      gain.connect(panner).connect(p.bus);
-    } else {
-      gain.connect(p.bus);
+    const { render, gain: level } = voiceParams(tone, { freq, velocity, position }, settings);
+    const take = (options, start, destination) => {
+      const data = renderPluck({ ...options, sampleRate: ctx.sampleRate });
+      const buffer = ctx.createBuffer(1, data.length, ctx.sampleRate);
+      buffer.getChannelData(0).set(data);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      const gain = ctx.createGain();
+      gain.gain.value = level;
+      source.connect(gain).connect(destination);
+      source.start(start);
+      return { source, gain };
+    };
+
+    // Strum choke (only tones that ask for it): a new strum, i.e. a pluck more than strumWindow
+    // after the part's previous one, fades whatever is still ringing, as re-strumming a guitar does.
+    if (tone.strumChoke && when - p.lastPluckWhen > settings.strumWindow / 1000) {
+      for (const other of voices) {
+        if (other.part === partName && !other.released && other.when < when) release(other, tone.strumChoke, when);
+      }
     }
-    source.start(when);
+    p.lastPluckWhen = Math.max(p.lastPluckWhen, when);
+
+    const sources = [], gains = [];
+    let panner = null;
+    if (p.double) {
+      // Double-tracked: no per-string pan (the two chains are panned apart). The second take has
+      // its own excitation noise, a slight detune and a short delay, like a second recorded pass.
+      const detune = Math.pow(2, tone.double.detuneCents / 1200);
+      for (const [options, start, bus] of [[render, when, p.bus], [{ ...render, freq: render.freq * detune }, when + tone.double.delay, p.double.bus]]) {
+        const t = take(options, start, bus);
+        sources.push(t.source); gains.push(t.gain);
+      }
+    } else {
+      let destination = p.bus;
+      if (ctx.createStereoPanner) {
+        panner = ctx.createStereoPanner();
+        panner.pan.value = clamp(pan * (tone.panWidth ?? 1), -1, 1);
+        panner.connect(p.bus);
+        destination = panner;
+      }
+      const t = take(render, when, destination);
+      sources.push(t.source); gains.push(t.gain);
+    }
 
     const voice = {
-      source, gain, key, when, released: false, part: partName,
+      sources, gains, key, when, released: false, part: partName,
       pitchClass: pitchClassOf(freq), depthDb: tone.releaseDepthDb,
     };
     // Re-plucking a string chokes its previous voice, and the voice limit fades the oldest, both
@@ -163,22 +235,42 @@ export function createAudioEngine(settings, { context = null } = {}) {
       for (const other of voices) if (other.key === key && other.part === partName && !other.released) release(other, 0.04, when);
     }
     voices.push(voice);
-    source.onended = () => {
-      voices = voices.filter(x => x !== voice);
-      source.disconnect(); gain.disconnect(); panner?.disconnect();
-    };
+    let ended = 0;
+    for (const source of sources) {
+      source.onended = () => {
+        if (++ended < sources.length) return;
+        voices = voices.filter(x => x !== voice);
+        for (const s of sources) s.disconnect();
+        for (const g of gains) g.disconnect();
+        panner?.disconnect();
+      };
+    }
     const active = voices.filter(x => !x.released);
     for (let i = 0; i < active.length - settings.maxVoices; i++) release(active[i], 0.06, when);
   }
 
   let song = null;
-  function playSong(buffer, onEnded, leadSeconds = 0.12) {
+  /**
+   * @param {AudioBuffer} buffer
+   * @param {() => void} [onEnded]
+   * @param {number} [leadSeconds]
+   * @param {object} [o]
+   * @param {{ start: number, end: number }} [o.loop]  play this section (seconds) in a loop until stopped
+   */
+  function playSong(buffer, onEnded, leadSeconds = 0.12, { loop = null } = {}) {
     stopSong();
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(songGain);
     const startTime = ctx.currentTime + leadSeconds;
-    source.start(startTime);
+    if (loop) {
+      source.loop = true;
+      source.loopStart = loop.start;
+      source.loopEnd = loop.end;
+      source.start(startTime, loop.start);
+    } else {
+      source.start(startTime);
+    }
     song = { source, startTime };
     source.onended = () => {
       if (song?.source !== source) return;
@@ -223,8 +315,12 @@ export function createAudioEngine(settings, { context = null } = {}) {
     // Time constant (seconds) for visuals that should fade with the audible decay.
     ringTime: (freq, partName = 'rhythm') => {
       const tone = parts.get(partName)?.tone;
-      return tone ? t60For(freq, tone) / 4.5 : 0.6;
+      return tone ? t60For(freq, tone, settings) / 4.5 : 0.6;
     },
+    setTrim,
+    releasePart,
+    // Current gain reduction of the output limiter (dB, ≤ 0), for measurements.
+    get limiterReduction() { return limiter.reduction; },
     playSong,
     stopSong,
     click,

@@ -8,7 +8,7 @@
 //                   voice; distorted tones need their drive on top of the audible drop
 //   chordChoke      seconds in which voices from the previous chord fade out on a chord change
 //                   (null = let them ring, as acoustic strings do)
-import { distortionCurve } from './distortion.js';
+import { buildStages } from './stages.js';
 
 // Old behaviour of every release: setTargetAtTime with τ = fade / 3, i.e. −26 dB at the fade time.
 const NATURAL_RELEASE_DB = 60 / Math.LN10;
@@ -52,36 +52,24 @@ function bodyAndRoom(ctx, { bodyHz, bodyGain, airGain, wet, roomSeconds }) {
 // Distortion amp: tighten the lows, push the mids into a soft clipper (4× oversampled), then a
 // speaker-cabinet curve (no impulse response files): low thump, scooped low-mids, a mid-forward
 // presence bump and a steep roll-off around 4.5 kHz, which is what keeps clipping from fizzing.
-function distortionAmp(ctx, o) {
-  const node = (type, frequency, extra = {}) => {
-    const filter = ctx.createBiquadFilter();
-    filter.type = type; filter.frequency.value = frequency;
-    if (extra.Q !== undefined) filter.Q.value = extra.Q;
-    if (extra.gain !== undefined) filter.gain.value = extra.gain;
-    return filter;
-  };
-  const input = ctx.createGain();
-  const tight = node('highpass', o.tightHz, { Q: 0.7 });
-  const preMid = node('peaking', o.preMidHz, { Q: 0.8, gain: o.preMidGain });
-  const pre = ctx.createGain();
-  pre.gain.value = o.preGain;
-  const shaper = ctx.createWaveShaper();
-  shaper.curve = distortionCurve(o.drive, { bias: o.bias });
-  shaper.oversample = '4x';
-  const cabLowCut = node('highpass', 75, { Q: 0.7 });
-  const thump = node('peaking', o.thumpHz, { Q: 1.1, gain: o.thumpGain });
-  const mud = node('peaking', o.mudHz, { Q: 1.0, gain: o.mudGain });
-  const presence = node('peaking', o.presenceHz, { Q: 0.9, gain: o.presenceGain });
-  const cone1 = node('lowpass', o.cabHz, { Q: 0.9 });
-  const cone2 = node('lowpass', o.cabHz * 1.25, { Q: 0.6 });
-  const output = ctx.createGain();
-  output.gain.value = o.level;
-  const chain = [input, tight, preMid, pre, shaper, cabLowCut, thump, mud, presence, cone1, cone2, output];
-  for (let i = 0; i + 1 < chain.length; i++) chain[i].connect(chain[i + 1]);
-  return {
-    input, output,
-    dispose() { for (const n of chain) n.disconnect(); },
-  };
+// Described as stages (stages.js) so Node measurements run the same chain.
+export function ampStages(o) {
+  const biquad = (type, frequency, Q, gain) => ({ kind: 'biquad', type, frequency, Q, ...(gain !== undefined ? { gain } : {}) });
+  return [
+    biquad('highpass', o.tightHz, 0.7),
+    biquad('peaking', o.preMidHz, 0.8, o.preMidGain),
+    { kind: 'gain', value: o.preGain },
+    { kind: 'shaper', curve: { kind: o.clip ?? 'tanh', drive: o.drive, bias: o.bias, n: o.clipN ?? 4 }, oversample: '4x' },
+    biquad('highpass', 75, 0.7),
+    biquad('peaking', o.thumpHz, 1.1, o.thumpGain),
+    biquad('peaking', o.mudHz, 1.0, o.mudGain),
+    biquad('peaking', o.presenceHz, 0.9, o.presenceGain),
+    biquad('lowpass', o.cabHz, 0.9),
+    biquad('lowpass', o.cabHz * 1.25, 0.6),
+    // Optional low shelf after the clipper (the tone lab's "thick" combo); off for the game's tone.
+    ...(o.lowShelfGain ? [biquad('lowshelf', o.lowShelfHz, undefined, o.lowShelfGain)] : []),
+    { kind: 'gain', value: o.level },
+  ];
 }
 
 // Rhythm distortion settings, shared by the chain and the tests (tests/instrument.test.mjs).
@@ -90,6 +78,8 @@ export const RHYTHM_DISTORTION = {
   thumpHz: 120, thumpGain: 2, mudHz: 420, mudGain: -4, presenceHz: 1700, presenceGain: 3,
   cabHz: 4500, level: 0.2,
 };
+
+const ELECTRIC_STAGES = ampStages(RHYTHM_DISTORTION);
 
 export const TONES = {
   steel: {
@@ -120,7 +110,8 @@ export const TONES = {
     releaseDepthDb: 90,
     chordChoke: 0.08,
     string: { t60: 1.3, damping: 0.3, brightness: 0.8 },
-    createChain: ctx => distortionAmp(ctx, RHYTHM_DISTORTION),
+    stages: ELECTRIC_STAGES,
+    createChain: ctx => buildStages(ctx, ELECTRIC_STAGES),
   },
 };
 
