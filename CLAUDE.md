@@ -28,7 +28,7 @@
 | 挑戰／提案文件 | `docs/*_設計挑戰.md`（開頭要有狀態） |
 | 給玩家看的 | `README.md` |
 
-- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`
+- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`；本機另有 `node tests/samples.test.mjs`
 - 不可提交：`samples/`（只記檔名、大小、用途和分析出來的數字）、`docs/工作日誌.md`、`.claude/skills/`
 - 敏感字樣：在技能資料夾的 `敏感字樣.txt`（不提交）
 - 推送：公開 repo，每次都先問擁有者
@@ -83,6 +83,7 @@ src/
 tests/
   analysis.test.mjs        合成歌曲 → 分析 → 和答案比對（BPM、每拍和弦、拍點誤差、第一拍）
   realistic-song.mjs       比較像真實錄音的測試樂團（七和弦、轉位、人聲、搖擺、變速、鼓前奏）
+  samples.test.mjs         本機才跑：真實歌曲的拍子是否落在脈動上（讀 samples/*.wav，沒有就跳過）
   instrument.test.mjs      撥弦合成、手勢、穿越判定、吸附、計分、空中弦邏輯（18 項）
 docs/                      設計說明、背景研究
 ```
@@ -90,9 +91,13 @@ docs/                      設計說明、背景研究
 ## 怎麼測試
 
 ```bash
-node tests/analysis.test.mjs      # 約 5 秒；加 --verbose 印出每小節的答案與猜測
+node tests/analysis.test.mjs      # 約 7 秒；加 --verbose 印出每小節的答案與猜測
 node tests/instrument.test.mjs
+node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 samples/s14.wav、s21.wav，沒有就跳過）
 ```
+
+- `samples.test.mjs` 不解碼 MP3，要先用 ffmpeg 轉成 WAV（轉出來的檔案也在 `samples/` 裡，一樣不能提交）：
+  `ffmpeg -i "samples/sample 14.mp3" -ac 2 -ar 44100 samples/s14.wav`（s21 同理）。它檢查一拍是整數個脈動（s21 約 571 ms，s14 375 或 750 ms）、≥ 90% 的拍點落在獨立擬合的脈動格線 ±40 ms 內，並印出 BPM、調性、小節長度和和弦段落。
 
 （需要 Node 18 以上，不用安裝套件；`npm test` 會兩個都跑。）
 
@@ -115,7 +120,8 @@ node tests/instrument.test.mjs
 ## 已知限制
 
 - **和弦分析：**簡單的三和弦伴奏幾乎全對；七和弦＋轉位約 44%，人聲很大聲時只有 16%（數字和原因見設計說明第 6.3 節）。只有 24 個大小三和弦、整首一個調性。
-- **速度：**沒有鼓的慢歌（約 70 BPM）會猜成兩倍速度；拍點仍然對得上，但每小節的第一拍會錯。假設 4/4 拍。
+- **速度：**先找脈動、再決定一拍是 1／2／4（或 3）個脈動，所以拍點一定落在脈動上（設計說明 6.2）。兩首範例：s21 104.9 BPM（舊版 140，錯）、s14 160 BPM（舊版 107；160 或 80 還要擁有者用耳朵確認）。沒有鼓的慢歌（約 70 BPM）仍會猜成兩倍速度；拍點對得上，但每小節的第一拍會錯。假設 4/4 拍（三拍子分組當 12/8）。玩家可以手動修正（`[` `]` `;` `'` `,` `.` `0`，`K` 節拍器）。
+- **和弦（s21）：**拍子修好後，s21 的和弦段落邊界全部落在小節線或半小節上，而且每 12 小節重複同樣的位置；但標籤仍然亂（A、F#m、Am、G、Em、D 混著），因為整首貝斯都在 A、節奏吉他是 A5–A6–A7 的 boogie 音型，加上鼓的雜訊。這是和弦辨識的問題，不是格線的問題。
 - **還沒驗證：**鏡頭手勢（捏、撥、握拳）的實際手感、聲音實際聽起來如何、真的 MP3／M4A 歌曲、Safari 和 Firefox。這些都要使用者本人測。
 - 歌曲上限 15 分鐘（`maxSongMinutes`）。分析在主執行緒分段執行，5 分鐘的歌約 2 秒。
 - 只有滑鼠和鏡頭輸入，沒有觸控；手機還不支援。
