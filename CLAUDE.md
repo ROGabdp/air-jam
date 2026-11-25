@@ -61,7 +61,7 @@
 ## 怎麼執行
 
 - **最簡單（Windows）：**雙擊 `開始玩.bat`（需要 Python）。它呼叫 `tools/start.ps1`，在 127.0.0.1 開伺服器（預設 8020，被佔用就往上找），強制 `.js`／`.mjs` 用 `text/javascript`、`.wasm` 用 `application/wasm`，再打開預設瀏覽器；加 `-NoBrowser` 不開瀏覽器。這兩個檔案由使用者維護，不要改。
-- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。沒有鏡頭時加 `?mouse=1`，`?tone=nylon` 可以指定音色。
+- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。沒有鏡頭時加 `?mouse=1`，`?tone=nylon`／`?tone=electric` 可以指定音色，`?keyguard=off` 關掉強力和弦的調內根音保護。
 - 鏡頭模式需要網路（從 jsDelivr 和 Google 下載 MediaPipe），而且必須是 localhost 或 https 才能開鏡頭。
 - 在 console 裡可以用 `airJam` 看目前的狀態（`state`、`song.analysis`、`instrument.strings`、`scorer.state`…）。
 
@@ -78,9 +78,9 @@ src/
   app/hud.js               DOM：畫面切換、HUD、結束畫面
   core/analysis/           dsp.js（FFT、降取樣、STFT）、analysis.js（拍點、和弦、調性；純函式）
   core/song/               demo-song.js（示範曲與答案比對）、backing-synth.js（純 JS 伴奏合成）
-  core/music/              theory.js（音名、和弦、顏色）、pitch-snap.js（和弦吸附）
+  core/music/              theory.js（音名、和弦、顏色）、pitch-snap.js（和弦吸附）、power-chords.js（強力和弦、調內根音保護）
   core/game/               song-map.js（時間 → 和弦／拍點）、scoring.js（判定、連擊、計分）
-  core/audio/              engine.js（播放、發聲上限、壓縮器）、karplus.js、tones.js（音色＋效果鏈）
+  core/audio/              engine.js（播放、聲部、發聲上限、換和弦收音、壓縮器、輸出上限）、karplus.js、tones.js（音色＋效果鏈）、distortion.js（削波曲線、收音時間）
   core/hands/              tracker.js（鏡頭、MediaPipe、鏡像座標）、gestures.js、mouse.js、draw.js
   core/fx/effects.js       粒子、浮動文字、拍點閃光
   instruments/             instrument.js（介面與登錄表）、air-strings/（空中弦、穿越判定）
@@ -88,7 +88,7 @@ tests/
   analysis.test.mjs        合成歌曲 → 分析 → 和答案比對（BPM、每拍和弦、拍點誤差、第一拍）
   realistic-song.mjs       比較像真實錄音的測試樂團（七和弦、轉位、人聲、搖擺、變速、鼓前奏）
   samples.test.mjs         本機才跑：真實歌曲的拍子是否落在脈動上（讀 samples/*.wav，沒有就跳過）
-  instrument.test.mjs      撥弦合成、手勢、穿越判定、吸附、計分、空中弦邏輯（18 項）
+  instrument.test.mjs      撥弦合成、手勢、穿越判定、吸附、強力和弦、調內保護、破音曲線、換和弦收音、計分、空中弦邏輯（22 項）
 docs/                      交接、決定紀錄、設計說明、背景研究、設計挑戰（工作日誌只在本機）
 ```
 
@@ -132,7 +132,7 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 
 - **和弦分析：**簡單的三和弦伴奏幾乎全對；七和弦＋轉位約 44%，人聲很大聲時只有 16%（數字和原因見設計說明第 6.3 節）。只有 24 個大小三和弦、整首一個調性。
 - **速度：**先找脈動、再決定一拍是 1／2／4（或 3）個脈動，所以拍點一定落在脈動上（設計說明 6.2）。兩首範例：s21 104.9 BPM（舊版 140，錯）、s14 160 BPM（舊版 107；160 或 80 還要擁有者用耳朵確認）。慢的歌（約 70～80 BPM，有鼓的搖滾也會，例如合成測試的 80 BPM 搖滾被判成 160）常常猜成兩倍速度；拍點對得上，但每小節的第一拍會錯。假設 4/4 拍（三拍子分組當 12/8）。玩家可以手動修正（`[` `]` `;` `'` `,` `.` `0`，`K` 節拍器）。
-- **和弦（s21）：**拍子修好後，s21 的和弦段落邊界全部落在小節線或半小節上，而且每 12 小節重複同樣的位置；但標籤仍然亂（A、F#m、Am、G、Em、D 混著），因為整首貝斯都在 A、節奏吉他是 A5–A6–A7 的 boogie 音型，加上鼓的雜訊。這是和弦辨識的問題，不是格線的問題。
+- **和弦（s21）：**拍子修好後，s21 的和弦段落邊界全部落在小節線或半小節上，而且每 12 小節重複同樣的位置；但標籤仍然亂（A、F#m、Am、G、Em、D 混著），因為整首貝斯都在 A、節奏吉他是 A5–A6–A7 的 boogie 音型，加上鼓的雜訊。這是和弦辨識的問題，不是格線的問題。電吉他音色的調內根音保護也改不了它：這些根音都在 A 大調允許的級數裡（設計說明 15.1.1）。
 - **還沒驗證：**鏡頭手勢（捏、撥、握拳）的實際手感、Safari 和 Firefox。這些都要使用者本人測。（2026-11-25 擁有者用滑鼠、和弦模式玩過兩首範例 MP3，覺得效果不錯；鏡頭還沒有正式測過。）
 - 歌曲上限 15 分鐘（`maxSongMinutes`）。分析在主執行緒分段執行，5 分鐘的歌約 2 秒。
 - 只有滑鼠和鏡頭輸入，沒有觸控；手機還不支援。
