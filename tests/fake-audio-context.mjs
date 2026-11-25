@@ -39,6 +39,7 @@ export class FakeAudioContext {
     this.currentTime = 0;
     this.created = [];
     this.sources = [];
+    this.oscillators = [];
     this.destination = new FakeNode(this, 'destination');
     this.outputLatency = 0;
     this.baseLatency = 0;
@@ -52,6 +53,7 @@ export class FakeAudioContext {
     n.reduction = 0;
     return n;
   }
+  createDelay(maxDelayTime = 1) { const n = new FakeNode(this, 'delay', { delayTime: 0 }); n.maxDelayTime = maxDelayTime; return n; }
   createConvolver() { const n = new FakeNode(this, 'convolver'); n.buffer = null; return n; }
   createConstantSource() {
     const n = new FakeNode(this, 'constant', { offset: 1 });
@@ -60,7 +62,12 @@ export class FakeAudioContext {
     n.stop = () => {};
     return n;
   }
-  createOscillator() { const n = new FakeBufferSource(this); n.kind = 'oscillator'; n.frequency = new FakeParam(this, 440); return n; }
+  // Oscillators (the metronome, LFOs) are not buffer sources: they are listed apart, so `sources` stays plucks.
+  createOscillator() {
+    const n = new FakeBufferSource(this); n.kind = 'oscillator'; n.type = 'sine'; n.frequency = new FakeParam(this, 440);
+    n.start = (when = 0) => { n.startedAt = when; this.oscillators.push(n); };
+    return n;
+  }
   createBufferSource() { return new FakeBufferSource(this); }
   createBuffer(channels, length, sampleRate) {
     const data = Array.from({ length: channels }, () => new Float32Array(length));

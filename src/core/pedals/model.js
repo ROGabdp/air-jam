@@ -4,6 +4,7 @@
 // Knob values are stored normalised (0..1); knobValue() maps them to physical units for the DSP.
 
 import { WAH_RANGES, WAH_DEFAULT_KNOBS } from '../audio/wah.js';
+import { CHORUS_RANGES, CHORUS_DEFAULT_KNOBS } from '../audio/post-fx/chorus.js';
 
 const clamp01 = v => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 
@@ -16,7 +17,7 @@ export const MODES = ['simple', 'advanced'];
 export const MAX_SIMPLE_KNOBS = 2;
 // Pedals whose sound (DSP) exists. The others are kept in the model and drawn, but make no sound yet
 // (owner decision: staged later); snapshots carry `sound: false` for them so a view can say so.
-export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion'];
+export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion', 'chorus'];
 
 const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 'dB', default: 0.67, simple: false };
 
@@ -63,13 +64,17 @@ export const PEDAL_TYPES = {
       level,
     ],
   },
+  // Chorus (src/core/audio/post-fx/chorus.js): simple 速度 and 深度 (the CE-2's two knobs; mix fixed at
+  // 40 %); advanced adds 混合, 音色 (wet low-pass), 寬度 (stereo spread) and 音量.
   chorus: {
     label: 'pedal.chorus', hue: 165, icon: 'chorus',
     knobs: [
-      { id: 'depth', label: 'pedal.knob.depth', min: 0, max: 3, unit: 'ms', default: 0.5, simple: true },
-      { id: 'mix', label: 'pedal.knob.mix', min: 0, max: 50, unit: '%', default: 0.5, simple: true },
-      { id: 'rate', label: 'pedal.knob.rate', min: 0.1, max: 3, unit: 'Hz', curve: 'log', default: 0.4, simple: false },
-      level,
+      { id: 'rate', label: 'pedal.knob.rate', min: CHORUS_RANGES.rateHz[0], max: CHORUS_RANGES.rateHz[1], unit: 'Hz', curve: 'log', default: CHORUS_DEFAULT_KNOBS.rate, simple: true },
+      { id: 'depth', label: 'pedal.knob.depth', min: CHORUS_RANGES.depthMs[0], max: CHORUS_RANGES.depthMs[1], unit: 'ms', default: CHORUS_DEFAULT_KNOBS.depth, simple: true },
+      { id: 'mix', label: 'pedal.knob.mix', min: CHORUS_RANGES.mixPercent[0], max: CHORUS_RANGES.mixPercent[1], unit: '%', default: CHORUS_DEFAULT_KNOBS.mix, simple: false },
+      { id: 'tone', label: 'pedal.knob.tone', min: CHORUS_RANGES.toneHz[0], max: CHORUS_RANGES.toneHz[1], unit: 'Hz', curve: 'log', default: CHORUS_DEFAULT_KNOBS.tone, simple: false },
+      { id: 'width', label: 'pedal.knob.width', min: CHORUS_RANGES.widthPercent[0], max: CHORUS_RANGES.widthPercent[1], unit: '%', default: CHORUS_DEFAULT_KNOBS.width, simple: false },
+      { ...level, default: CHORUS_DEFAULT_KNOBS.level },
     ],
   },
   delay: {

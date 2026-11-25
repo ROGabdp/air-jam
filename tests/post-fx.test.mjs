@@ -73,9 +73,16 @@ test('order: chorus → delay → reverb, slot n output = slot n+1 input', () =>
   assert.equal(bus.slots.at(-1).output, bus.output);
 });
 
+// The bus itself (wiring only): every slot a transparent stub, as the modules were before their DSP.
+const bypassModules = Object.fromEntries(POST_FX_ORDER.map(id => [id, {
+  id,
+  paramsFromSnapshot: POST_FX_MODULES[id].paramsFromSnapshot,
+  create: (ctx, { input, output }) => { input.connect(output); return { apply() {}, dispose() { input.disconnect(output); } }; },
+}]));
+
 test('bypass: one path of unity gains, no automation, nothing else (bit-exact)', () => {
   const ctx = new FakeAudioContext();
-  const bus = createPostFxBus(ctx);
+  const bus = createPostFxBus(ctx, { modules: bypassModules });
   bus.apply(postFxParams(soundingSnapshot()), { type: 'load' });   // stubs ignore even "on"
   bus.setTempo({ pulseSeconds: 0.286, beatSeconds: 0.571 });
   bus.onChordChange(1); bus.onStrum(1, 0.8);
@@ -97,10 +104,10 @@ test('bypass: one path of unity gains, no automation, nothing else (bit-exact)',
   assert.equal(bus.input.outputs.size, 0);
 });
 
-test('bypass (Node model): processPostFx and renderPart with post are sample-exact', () => {
+test('bypass (Node model): every pedal off — processPostFx and renderPart with post are sample-exact', () => {
   const left = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i / 7) * 0.7);
   const right = Float32Array.from(left, x => -x * 0.5);
-  const out = processPostFx(postFxParams(soundingSnapshot()), { left, right }, { sampleRate: 48000 });
+  const out = processPostFx(postFxParams(soundingSnapshot({})), { left, right }, { sampleRate: 48000 });   // all off
   assert.deepEqual(out.left, left); assert.deepEqual(out.right, right);
   const events = [0, 0.01, 0.02, 0.5].map((time, i) => ({ time, freq: 110 * (i + 1), velocity: 0.7 }));
   const tone = TONES.electric;

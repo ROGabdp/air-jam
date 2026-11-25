@@ -132,7 +132,7 @@ function boardRig(options = {}) {
 }
 
 test('availability: wah, overdrive and distortion are usable; the others wait for their sound', () => {
-  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive', 'wah']);
+  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['chorus', 'distortion', 'overdrive', 'wah']);
 });
 
 test('availability: a dimmed pedal cannot be switched or turned; it says "coming soon"', () => {
@@ -187,14 +187,16 @@ test('availability: keys 4–9 and W skip dimmed pedals; W switches the wah, who
 });
 
 test('availability: the tuning screen locks dimmed pedals too; flipping the flag unlocks them', () => {
-  const { board, click, find } = boardRig();
-  board.route([], 0, 'ready');
-  board.openTuning();
-  const chorus = find(t => t.kind === 'switch' && t.pedal === 'chorus');
-  click({ x: chorus.cx, y: chorus.cy }, 'ready');
-  assert.equal(board.model.isOn('chorus'), false);
+  // Chorus has sound now; dim it for this test (any pedal behaves the same).
   const saved = { ...PEDAL_AVAILABLE };
   try {
+    setPedalAvailability({ chorus: false });
+    const { board, click, find } = boardRig();
+    board.route([], 0, 'ready');
+    board.openTuning();
+    const chorus = find(t => t.kind === 'switch' && t.pedal === 'chorus');
+    click({ x: chorus.cx, y: chorus.cy }, 'ready');
+    assert.equal(board.model.isOn('chorus'), false);
     setPedalAvailability({ chorus: true, nonsense: true });
     assert.equal('nonsense' in PEDAL_AVAILABLE, false);
     click({ x: chorus.cx, y: chorus.cy }, 'ready');
@@ -202,7 +204,7 @@ test('availability: the tuning screen locks dimmed pedals too; flipping the flag
   } finally {
     setPedalAvailability(saved);
   }
-  assert.equal(isPedalAvailable('chorus'), false);
+  assert.equal(isPedalAvailable('chorus'), true);
 });
 
 // ---------- page buttons pressed by hands ----------
