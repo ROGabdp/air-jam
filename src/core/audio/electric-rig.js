@@ -182,6 +182,8 @@ export function rigFromSnapshot(snapshot, { levelTable = AUTO_LEVEL_DB, wahTrim 
       ...wahLevels(wah),
       level: manual ? scale(RANGES.wah.level, knob('wah', 'level', 0.67)) : 0,
     },
+    // 延音 (the amp's knob, 0 = off): a sustainer on each string (karplus.js SUSTAINER).
+    sustain: clamp(snapshot?.amp?.params?.sustain ?? 0, 0, 1),
     tiltDb: TILT_DB * 2 * (tiltKnob - 0.5),
     lowRestoreDb: distOn ? LOW_RESTORE.distortion : odOn ? LOW_RESTORE.crunch : LOW_RESTORE.clean,
     levelDb: autoLevelDb({ on: odOn, knob: odDrive }, { on: distOn, knob: distDrive }, levelTable)
@@ -287,6 +289,7 @@ export function electricTone(rig = rigFromSnapshot(null), fields = {}) {
     strumChoke: 0.03,
     pick: NEAR_BRIDGE,
     string: { ...LONG_STRING },
+    sustain: rig.sustain ?? 0,
     stages,
     // controls: { wah } (the part's wah position signal, shared by both takes).
     createChain: (ctx, controls) => buildSwitchableStages(ctx, stages, controls),

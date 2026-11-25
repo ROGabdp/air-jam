@@ -168,7 +168,9 @@ function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon }) 
   }
 }
 
-const soonOf = (view, pedal) => (view.available && !view.available(pedal) ? view.t('pedal.soon') : null);
+const soonOf = (view, pedal) => (pedal !== AMP && view.available && !view.available(pedal) ? view.t('pedal.soon') : null);
+// The amp is always on, so its knobs are never dimmed.
+const isLive = (model, pedal) => pedal === AMP || model.isOn(pedal);
 
 function valueText(t, def, value) {
   if (!def) return `${Math.round(value * 100)}`;
@@ -339,7 +341,7 @@ export function drawWahStrip(g, view) {
   if (!auto) {
     text(g, t('pedal.wahBright'), cx, track.y0 - 6, { size: 11, color: 'rgba(244,246,255,0.6)' });
     text(g, t('pedal.wahDark'), cx, track.y1 + 16, { size: 11, color: 'rgba(244,246,255,0.6)' });
-    text(g, t('pedal.wahHint'), cx, strip.y + strip.h - 8, { size: 11, color: 'rgba(244,246,255,0.65)' });
+    text(g, t(view.mouse ? 'pedal.wahHintMouse' : 'pedal.wahHint'), cx, strip.y + strip.h - 8, { size: 11, color: 'rgba(244,246,255,0.65)' });
   }
   g.restore();
   for (const target of view.targets) {
@@ -384,7 +386,7 @@ export function drawTuning(g, view) {
       drawKnob(g, t, { ...target, hue: 20, label: MACROS[target.macro].label, def: null, active: isActive(view, target), hover });
     } else if (target.kind === 'knob') {
       drawKnob(g, t, { ...target, hue: hueOf(target.pedal), label: target.def.label, def: target.def,
-        active: isActive(view, target), hover, dim: !model.isOn(target.pedal) || !!soonOf(view, target.pedal) });
+        active: isActive(view, target), hover, dim: !isLive(model, target.pedal) || !!soonOf(view, target.pedal) });
       drawFeedback(g, view, target);
     } else if (target.kind === 'select') {
       const selected = ui.selected === target.pedal;
@@ -413,7 +415,7 @@ export function drawTuning(g, view) {
     text(g, model.preset ? t('pedal.presetLabel') : t('pedal.custom'), W / 2, H * 0.31 - Math.max(52, H * 0.09) / 2 - 14, { size: 12, color: 'rgba(244,246,255,0.6)' });
     text(g, t('pedal.autoLevel'), W / 2, H * 0.79, { size: 12, color: 'rgba(244,246,255,0.6)' });
   } else if (ui.selected === AMP) {
-    text(g, t('pedal.ampNote'), W / 2, H * 0.6, { size: 15, color: 'rgba(244,246,255,0.8)' });
+    text(g, t('pedal.ampNote'), W / 2, H * 0.79, { size: 12, color: 'rgba(244,246,255,0.6)' });
   } else {
     text(g, t('pedal.chainNote'), W / 2, H * 0.79, { size: 12, color: 'rgba(244,246,255,0.6)' });
   }

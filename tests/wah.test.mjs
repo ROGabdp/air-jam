@@ -3,7 +3,7 @@
 // position signal): frequency and Q mapping, smoothing step bounds, the strum-driven auto wah, the
 // beat-synced sweep under tempo corrections, loudness compensation, and the engine wiring on a fake
 // AudioContext. Strip gating (no plucks from the strip): tests/pedalboard.test.mjs; availability and
-// the on-page controls: tests/menu.test.mjs.
+// the on-page controls: tests/menu.test.mjs. The mouse wheel → wah (mouse mode) is at the end.
 import assert from 'node:assert/strict';
 import {
   SMITH, WAH_RANGES, WAH_MOTION, wahSettings, wahFrequency, wahQ, wahCompensation, createWahControl,
@@ -14,6 +14,8 @@ import { rigFromSnapshot, rigStages, toneVoicing } from '../src/core/audio/elect
 import { createAudioEngine } from '../src/core/audio/engine.js';
 import { TONES } from '../src/core/audio/tones.js';
 import { createPedalModel, visibleKnobs, PEDAL_TYPES } from '../src/core/pedals/model.js';
+import { createPedalboard } from '../src/core/pedals/pedalboard.js';
+import { wheelNotches, WAH_WHEEL } from '../src/core/pedals/wheel.js';
 import { analyzeSync, retime } from '../src/core/analysis/analysis.js';
 import { renderBacking } from '../src/core/song/backing-synth.js';
 import { DEMO } from '../src/core/song/demo-song.js';
@@ -355,6 +357,162 @@ test('engine: switching the wah on cross-fades to the other copy; the rock sound
   engine.applyPedals(model.snapshot(), { type: 'toggle', id: 'wah', on: true });
   const faders = ctx.created.filter(n => n.kind === 'gain' && n.gain.calls.some(c => c.type === 'target' && c.tau === 0.012));
   assert.ok(faders.length >= 2, 'faders cross-fade (toggle time constant)');
+});
+
+// ---------- mouse wheel → wah (mouse mode) ----------
+const WHEEL_STAGE = { width: 1280, height: 720 };
+function memoryStore() {
+  const data = new Map();
+  const store = { data, writes: 0, getItem: k => (data.has(k) ? data.get(k) : null), setItem: (k, v) => { store.writes++; data.set(k, String(v)); } };
+  return store;
+}
+function wheelRig({ mouse = true, wah = 'hand', position: start = 0 } = {}) {
+  const toasts = [];
+  const storage = memoryStore();
+  const board = createPedalboard({
+    settings: { ...SETTINGS }, t: k => k, stage: WHEEL_STAGE, storage, toast: x => toasts.push(x),
+    mouseMode: () => mouse, isAvailable: () => true,
+  });
+  if (wah) {
+    board.model.toggle('wah', true);
+    board.model.setParam('wah', 'mode', wah === 'hand' ? 0 : 1);
+    board.model.setParam('wah', 'position', start);
+  }
+  let time = 0;
+  const frame = (state = 'playing', hands = []) => { time += 1 / 60; return board.route(hands, time, state); };
+  const frames = (seconds, state) => { for (let i = 0; i < seconds * 60; i++) frame(state); };
+  frame();
+  const spin = (deltaY, point = { x: 640, y: 300 }, extra = {}) => {
+    const event = { clientX: point.x, clientY: point.y, deltaX: 0, deltaY, deltaMode: 0, prevented: false, preventDefault() { this.prevented = true; }, ...extra };
+    board.wheel(event);
+    return event;
+  };
+  const position = () => board.model.param('wah', 'position');
+  return { board, toasts, storage, frame, frames, spin, position };
+}
+
+test('wheel: notches from Chrome, Firefox, Shift+wheel and trackpads; up = toe; capped per event', () => {
+  assert.equal(wheelNotches({ deltaY: -100, deltaMode: 0 }), 1, 'Chrome notch up');
+  assert.equal(wheelNotches({ deltaY: 100, deltaMode: 0 }), -1, 'notch down');
+  assert.equal(wheelNotches({ deltaY: -3, deltaMode: 1 }), 1, 'Firefox lines');
+  assert.equal(wheelNotches({ deltaX: -100, deltaY: 0, deltaMode: 0 }), 1, 'Shift+wheel (deltaX)');
+  assert.ok(Math.abs(wheelNotches({ deltaY: -4, deltaMode: 0 }) - 0.04) < 1e-12, 'trackpad fraction');
+  assert.equal(wheelNotches({ deltaY: -2000, deltaMode: 0 }), WAH_WHEEL.maxNotches, 'capped');
+  assert.equal(wheelNotches({ deltaY: 0, deltaX: 0 }), 0);
+  assert.equal(wheelNotches({}), 0);
+  return `${WAH_WHEEL.notches} notches heel → toe, ≤ ${WAH_WHEEL.maxNotches} per event`;
+});
+
+test('wheel: rolling up opens the pedal, bounded 0..1; 12 notches go heel → toe; the strip shows it', () => {
+  const { spin, frames, position, board } = wheelRig();
+  for (let i = 0; i < WAH_WHEEL.notches; i++) { spin(-100); frames(0.05); }
+  frames(0.5);
+  assert.ok(Math.abs(position() - 1) < 1e-9, `toe after 12 notches: ${position()}`);
+  spin(-300); frames(0.5);
+  assert.equal(position(), 1, 'stays at the toe');
+  for (let i = 0; i < 6; i++) spin(100);
+  frames(0.6);
+  assert.ok(Math.abs(position() - 0.5) < 1e-9, `half way down: ${position()}`);
+  for (let i = 0; i < 20; i++) spin(100);
+  frames(0.6);
+  assert.equal(position(), 0, 'stays at the heel');
+  assert.ok(board.targets().some(t => t.kind === 'strip'), 'strip shown (hand mode)');
+});
+
+test('wheel: a notch glides (no jump), arrives within ~0.35 s, and is saved once when it arrives', () => {
+  const { spin, frame, position, storage } = wheelRig({ position: 0.5 });
+  const writes = storage.writes;
+  spin(-100);
+  const steps = [];
+  let previous = position(), arrived = null;
+  for (let i = 0; i < 60; i++) {
+    frame();
+    steps.push(position() - previous);
+    previous = position();
+    if (arrived === null && Math.abs(position() - (0.5 + 1 / 12)) < 1e-9) arrived = (i + 1) / 60;
+  }
+  const biggest = Math.max(...steps);
+  assert.ok(biggest < 0.5 / 12, `largest step per frame ${biggest.toFixed(4)} (a notch is ${(1 / 12).toFixed(4)})`);
+  assert.ok(steps.every(s => s >= 0), 'monotonic');
+  assert.ok(arrived !== null && arrived <= 0.35, `arrived at ${arrived} s`);
+  assert.equal(storage.writes - writes, 1, 'saved once, on arrival');
+  return `largest step ${(biggest * 12).toFixed(2)} notch per frame at 60 fps; arrives in ${arrived?.toFixed(2)} s`;
+});
+
+test('wheel: trackpad deltas move it continuously (many small events = the same travel)', () => {
+  const { spin, frames, position } = wheelRig({ position: 0.2 });
+  for (let i = 0; i < 50; i++) { spin(-6); frames(1 / 60); }
+  frames(0.6);
+  assert.ok(Math.abs(position() - (0.2 + 3 / 12)) < 1e-9, `300 px = 3 notches: ${position()}`);
+});
+
+test('wheel: over a knob it turns the knob, elsewhere (even in the footswitch zone) it moves the wah', () => {
+  const { board, spin, frames, position } = wheelRig({ position: 0.5 });
+  const knob = board.targets().find(t => t.kind === 'knob' && t.pedal === 'distortion' && t.knob === 'drive');
+  const drive = board.model.param('distortion', 'drive');
+  const event = spin(-100, { x: knob.cx, y: knob.cy });
+  frames(0.5);
+  assert.ok(event.prevented);
+  assert.ok(board.model.param('distortion', 'drive') > drive, 'knob turned');
+  assert.equal(position(), 0.5, 'wah untouched');
+  const zone = board.targets().find(t => t.kind === 'zone').rect;
+  const used = spin(-100, { x: 4, y: zone.y + zone.h - 4 });
+  frames(0.5);
+  assert.ok(used.prevented, 'no page scroll');
+  assert.ok(Math.abs(position() - (0.5 + 1 / 12)) < 1e-9, `wah moved: ${position()}`);
+});
+
+test('wheel: camera mode and the tuning screen leave the wah alone (and the page may scroll)', () => {
+  const camera = wheelRig({ mouse: false, position: 0.5 });
+  const event = camera.spin(-100);
+  camera.frames(0.5);
+  assert.equal(camera.position(), 0.5);
+  assert.equal(event.prevented, false);
+  const mouse = wheelRig({ position: 0.5 });
+  mouse.frame('ready');
+  mouse.board.openTuning();
+  const e2 = mouse.spin(-100, { x: 20, y: 20 });
+  mouse.frames(0.5, 'ready');
+  assert.equal(mouse.position(), 0.5, 'tuning screen: only knobs');
+  assert.equal(e2.prevented, false);
+});
+
+test('wheel: wah in auto mode switches to hand mode on the first notch (with a toast); wah off only hints', () => {
+  const auto = wheelRig({ wah: 'auto', position: 0.3 });
+  auto.spin(-100);
+  auto.frames(0.5);
+  assert.equal(auto.board.model.param('wah', 'mode'), 0, 'now hand mode');
+  assert.ok(auto.toasts.includes('pedal.wheelWahHand'), auto.toasts.join());
+  assert.ok(Math.abs(auto.position() - (0.3 + 1 / 12)) < 1e-9, `moved from where it was: ${auto.position()}`);
+  assert.ok(auto.board.targets().some(t => t.kind === 'strip'), 'strip shows');
+
+  const off = wheelRig({ wah: null });
+  off.board.model.toggle('wah', false);
+  const before = off.position();
+  for (let i = 0; i < 5; i++) { off.spin(-100); off.frames(0.1); }
+  assert.equal(off.board.model.isOn('wah'), false, 'the wheel does not switch the wah on');
+  assert.equal(off.position(), before);
+  assert.equal(off.toasts.filter(x => x === 'pedal.wheelWahOff').length, 1, 'one hint, not one per notch');
+  off.frames(3);
+  off.spin(-100);
+  assert.equal(off.toasts.filter(x => x === 'pedal.wheelWahOff').length, 2, 'again after a few seconds');
+});
+
+test('wheel: the strip takes over from a glide; the wheel then continues from the strip position', () => {
+  const { board, spin, frame, frames, position } = wheelRig({ position: 0.5 });
+  spin(-300);
+  frame();
+  const wah = board.targets().find(t => t.kind === 'strip').rect;
+  const hover = { id: 'mouse', source: 'mouse', palm: 90, points: null, fist: false, pinching: false, fresh: false, tipSpeed: 0 };
+  const p = { x: wah.x + wah.w / 2, y: wah.y + wah.h * 0.8 };
+  for (let i = 0; i < 20; i++) frame('playing', [{ ...hover, tip: p, pinchPoint: p, center: p }]);
+  const fromStrip = position();
+  assert.ok(fromStrip < 0.4, `strip position ${fromStrip}`);
+  frames(0.5);
+  assert.equal(position(), fromStrip, 'the cancelled glide does not come back');
+  spin(-100);
+  frames(0.5);
+  assert.ok(Math.abs(position() - (fromStrip + 1 / 12)) < 1e-9, `wheel continues from the strip: ${position()}`);
 });
 
 console.table(results);

@@ -1,4 +1,4 @@
-// node tools/tone-lab/measure.mjs [--set rig|lab|all|wah] [--repeats 6] [--combo labC] [--seconds 16]
+// node tools/tone-lab/measure.mjs [--set rig|lab|all|wah|sustain] [--repeats 6] [--combo labC] [--seconds 16]
 // Offline measurements with the Node model (model.mjs), using the challenge doc's metrics
 // (docs/效果器_設計挑戰.md 4.3) plus crunch indicators. --set rig (default): the game's electric rig
 // with the pedalboard presets 清音／微破／搖滾／重金屬 and both ends of the drive range (overdrive and
@@ -9,6 +9,9 @@
 // the small-signal response at each position; level with the wah on minus off by position (presets,
 // 範圍 0 / 0.5 / 1; five power chords); and peak / limiter reduction against the songs with the pedal
 // held at heel, middle, toe, in auto mode (跟刷弦) and in 跟拍子.
+// --set sustain: the amp's 延音 knob (karplus.js SUSTAINER): −10 / −20 dB decay times by knob for
+// 清音／搖滾／重金屬, the chokes at 0 and max, ringing chords (one strum a bar) against the songs
+// (peak, limiter), and main-thread time per 8-string strum (head render, fake context) by knob.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +20,11 @@ import { LAB_COMBOS, LAB_ORDER, boosterStages } from '../../src/core/audio/tone-
 import { rigFromSnapshot, rigStages, electricTone, rigDriveDb } from '../../src/core/audio/electric-rig.js';
 import { createPedalModel, PRESETS } from '../../src/core/pedals/model.js';
 import { renderDemoSong } from '../../src/core/song/demo-song.js';
-import { measureTone, TARGETS } from '../../src/lab/metrics.js';
+import { measureTone, measureSustain, TARGETS, strum, A5_EIGHT } from '../../src/lab/metrics.js';
+import { createAudioEngine } from '../../src/core/audio/engine.js';
+import { TONES } from '../../src/core/audio/tones.js';
+import { sustainerSettings } from '../../src/core/audio/karplus.js';
+import { FakeAudioContext } from '../../tests/fake-audio-context.mjs';
 import { modelRenderer, seeded, renderPart, renderMaster } from './model.mjs';
 import { wahFrequency, wahQ, createWahControl, simulateParam } from '../../src/core/audio/wah.js';
 import { stagesResponse } from '../../src/core/audio/stages.js';
@@ -97,6 +104,105 @@ for (const [key, name, value] of [['driveMin', 'drive min', 0], ['driveMax', 'dr
 }
 const SETS = { rig: ['labA', 'labD', ...PRESETS.map(p => p.id), 'driveMin', 'driveMax'], lab: LAB_ORDER };
 SETS.all = [...new Set([...SETS.lab, ...SETS.rig])];
+
+if (set === 'sustain') {
+  await measureSustainKnob();
+  process.exit(0);
+}
+
+async function measureSustainKnob() {
+  const started = Date.now();
+  const knobs = [0, 0.25, 0.5, 0.75, 1];
+  const snapshotOf = (preset, sustain) => {
+    const model = createPedalModel();
+    model.applyPreset(preset);
+    model.setParam('amp', 'sustain', sustain);
+    return model.snapshot();
+  };
+  const toneOf = (preset, sustain) => electricTone(rigFromSnapshot(snapshotOf(preset, sustain)));
+  const db = x => 20 * Math.log10(x);
+
+  // 1. Decay times by knob (one 4-string A5 strum, velocity 0.6; 12 s so long tails are not cut).
+  const decay = [];
+  for (const preset of ['clean', 'rock', 'metal']) {
+    const row = { preset: presetLabel[preset] };
+    for (const k of knobs) {
+      const r = await measureSustain({ render: modelRenderer(SETTINGS, SAMPLE_RATE), tone: toneOf(preset, k), repeats: 3, seconds: 12 });
+      row[`延音 ${k}`] = `${r.sustain.toFixed(2)} / ${r.sustain20.toFixed(2)}`;
+    }
+    decay.push(row);
+  }
+  const max = sustainerSettings(1);
+  console.log(`Sustain: seconds until 10 / 20 dB below the strum's peak (Node, ${SAMPLE_RATE} Hz; 延音 1 = ratio ${max.ratio}, make-up ≤ ${max.makeupDb} dB)`);
+  console.table(decay);
+
+  // 2. Chokes at 延音 0 and 1: chord change at 80 ms, new strum at 30 / 50 ms (8 strings, velocity 1).
+  const render = modelRenderer(SETTINGS, SAMPLE_RATE);
+  const chokes = [];
+  for (const preset of ['clean', 'rock', 'metal']) for (const k of [0, 1]) {
+    const tone = toneOf(preset, k);
+    const hard = strum(A5_EIGHT, { velocity: 1 });
+    const chord = await render({ tone, events: hard, chokes: [{ time: 0.4, keep: [] }], duration: 0.6 });
+    const all = await render({ tone, events: hard, chokes: [{ time: 0.4, all: true, fade: tone.strumChoke }], duration: 0.6 });
+    const at = (out, ms) => -db(rms(out, 0.4 + ms / 1000, 0.41 + ms / 1000) / rms(out, 0.38, 0.4));
+    chokes.push({
+      preset: presetLabel[preset], '延音': k, 'chord change 80 ms (dB, ≥ 40)': +at(chord, 80).toFixed(0),
+      'new strum 30 ms (dB)': +at(all, 30).toFixed(0), 'new strum 50 ms (dB)': +at(all, 50).toFixed(0),
+    });
+  }
+  console.log('Chokes with the knob at 0 and 1:');
+  console.table(chokes);
+
+  // 3. Ringing chords against the songs: one 8-string strum a bar, chord change on the bar.
+  const rows = [];
+  for (const song of songs) {
+    const bar = 4 * 60 / song.bpm;
+    const events = [], changes = [];
+    for (let t = 0, i = 0; t < seconds - 0.5; t += bar, i++) {
+      if (i) changes.push({ time: t, keep: [] });
+      events.push(...strum(A5_EIGHT, { time: t, velocity: 0.8 }));
+    }
+    const row = { song: song.name };
+    for (const preset of ['clean', 'rock', 'metal']) for (const k of [0, 1]) {
+      const part = renderPart(toneOf(preset, k), events, { duration: seconds, chokes: changes, settings: SETTINGS, sampleRate: SAMPLE_RATE, seed: 5 });
+      const mix = renderMaster(part, song.section, { sampleRate: SAMPLE_RATE, settings: SETTINGS });
+      let limiter = 0;
+      for (let i = SAMPLE_RATE; i < mix.reductionDb.length; i++) limiter = Math.min(limiter, mix.reductionDb[i]);
+      row[`${presetLabel[preset]} ${k}`] = `${peakOf(mix).toFixed(3)} / ${(-limiter).toFixed(1)} / ${db(rms(part, 0.5)).toFixed(1)}`;
+    }
+    rows.push(row);
+  }
+  console.log(`Ringing chords against the songs (one 8-string strum a bar, ${seconds} s from 10 s) at 延音 0 and 1: `
+    + 'mix peak / limiter reduction (dB) / guitar RMS (dB). Targets: peak ≤ 0.99, limiter ≲ 3 dB.');
+  console.table(rows);
+
+  // 4. Main-thread time per 8-string strum (the head render; tails come later in ≤ 4 ms slices).
+  const timeStrum = k => {
+    const ctx = new FakeAudioContext();
+    const engine = createAudioEngine(SETTINGS, { context: ctx, streaming: true });
+    engine.setTone(TONES.electric);
+    engine.applyPedals(snapshotOf('rock', k));
+    const times = [];
+    for (let i = 0; i < 40; i++) {
+      ctx.currentTime = i * 0.4;
+      const t0 = performance.now();
+      for (const freq of A5_EIGHT) engine.pluck({ freq, velocity: 0.7 });
+      if (i >= 10) times.push(performance.now() - t0);
+      if (i % 4 === 3) engine.flushTails();
+    }
+    times.sort((a, b) => a - b);
+    return times;
+  };
+  for (const k of knobs) timeStrum(k);   // warm up
+  const cpu = knobs.map(k => {
+    const times = timeStrum(k);
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    return { '延音': k, 'mean (ms)': +mean.toFixed(2), 'median (ms)': +times[times.length >> 1].toFixed(2), 'worst (ms)': +times.at(-1).toFixed(2) };
+  });
+  console.log('Main-thread time per 8-string strum, head only (Node, fake AudioContext; see 設計說明 15.1.5 for Chrome):');
+  console.table(cpu);
+  console.log(`done in ${((Date.now() - started) / 1000).toFixed(1)} s.`);
+}
 
 if (set === 'wah') {
   await measureWah();

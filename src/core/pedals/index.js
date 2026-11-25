@@ -6,6 +6,7 @@
 //   draw.js           2D canvas drawing (replaceable by another view)
 //   audio-binding.js  the DSP seam (engine.applyPedals) and the audition stub
 //   availability.js   which pedals can be used yet (the others are dimmed, "coming soon")
+//   wheel.js          mouse wheel → wah position in mouse mode (pure)
 //   dom.js, pedals.css  ready-panel button, HUD offsets
 import { createPedalboard } from './pedalboard.js';
 import { bindPedalAudio } from './audio-binding.js';

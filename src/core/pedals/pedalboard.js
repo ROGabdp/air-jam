@@ -13,8 +13,10 @@ import { zoneRect, zoneTargets, tuningTargets, hitTarget, inRect, wahLayout, wah
 import { drawZone, drawWahStrip, drawTuning } from './draw.js';
 import { createAuditionStub } from './audio-binding.js';
 import { isPedalAvailable } from './availability.js';
+import { createWheelGlide, wheelNotches } from './wheel.js';
 
 const WHEEL_STEP = 0.0008;   // knob travel per wheel delta pixel
+const WHEEL_HINT_GAP = 3;    // seconds between "turn the wah on" hints from the wheel
 
 export function createPedalboard({ settings, t, stage, storage = null, element = null, toast = () => {}, mouseMode = () => false, isAvailable = isPedalAvailable }) {
   const model = createPedalModel({ storage });
@@ -35,6 +37,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
   let zoneActive = false, stripActive = false;
   let hovered = [];
   let lastToggle = null;               // { target, time }
+  const wheelGlide = createWheelGlide();
+  let wheelHintAt = -Infinity;
 
   const wahStripShown = () => isAvailable('wah') && model.isOn('wah') && model.param('wah', 'mode') < 0.5;
   const soon = id => toast(t('pedal.comingSoon', { name: t(PEDAL_TYPES[id].label) }));
@@ -53,7 +57,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
   function hitTest(targets, point) {
     const target = hitTarget(targets, point);
     // A pedal without sound yet: its switch and knobs only answer "coming soon".
-    if ((target?.kind === 'switch' || target?.kind === 'knob') && target.pedal && !isAvailable(target.pedal)) {
+    if ((target?.kind === 'switch' || target?.kind === 'knob') && target.pedal && target.pedal !== AMP && !isAvailable(target.pedal)) {
       return { kind: 'locked', pedal: target.pedal, rect: target.rect, cx: target.cx, cy: target.cy, r: target.r };
     }
     if (target?.kind === 'knob') target.value = target.macro ? model.macro(target.macro) : model.param(target.pedal, target.knob);
@@ -103,12 +107,14 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
    * @returns {object[]} the hands the instrument may use
    */
   function route(hands, now, gameState) {
+    const dt = Math.max(0, Math.min(0.25, now - time));
     time = now;
     visible = gameState === 'ready' || gameState === 'playing';
     if (!visible || (tuningOpen && gameState !== 'ready')) {
       if (tuningOpen) closeTuning();
       if (!visible) {
         gestures.reset(); zoneGate.reset(); stripGate.reset(); zoneActive = stripActive = false; hovered = [];
+        settleWheel();
         if (stripShownAt !== null) { stripShownAt = null; onStripChange(null); }
         return hands;
       }
@@ -126,12 +132,22 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
       inStrip = stripGate.update(pointers, (p, margin) => inRect(p, wah.strip, margin));
       const engaged = gestures.engaged();
       const steering = pointers.filter(p => inStrip.has(p.id) && !engaged.has(p.id) && !inRect(p.probe, wah.button));
-      if (steering.length) model.setParam('wah', 'position', wahPositionAt(wah, steering[0].probe.y), { commit: false });
+      if (steering.length) {
+        wheelGlide.cancel();
+        model.setParam('wah', 'position', wahPositionAt(wah, steering[0].probe.y), { commit: false });
+      }
       if (stripActive && !steering.length) model.setParam('wah', 'position', model.param('wah', 'position'), { commit: true });
       stripActive = steering.length > 0;
     } else {
       stripGate.reset();
       stripActive = false;
+    }
+    // The wheel's glide (mouse mode): the strip's marker and the sound follow it.
+    if (!stripActive && wahStripShown()) {
+      const glide = wheelGlide.step(dt);
+      if (glide) model.setParam('wah', 'position', glide.value, { commit: glide.done });
+    } else if (!wahStripShown()) {
+      settleWheel();
     }
     zoneActive = inZone.size > 0;
     const stripSide = !tuningOpen && wahStripShown() ? wahStripSide(settings) : null;
@@ -215,14 +231,46 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     return false;
   }
 
-  // Mouse wheel over a knob nudges it (optional extra for mouse players).
+  // A glide cut short (pedal switched off, auto mode, screen left) keeps where it got to.
+  function settleWheel() {
+    if (!wheelGlide.active) return;
+    wheelGlide.cancel();
+    model.setParam('wah', 'position', model.param('wah', 'position'), { commit: true });
+  }
+
+  /**
+   * Wheel in mouse mode, not over a knob: the wah pedal (wheel.js). Wah in auto mode: the first
+   * notch switches it to hand mode (and says so); wah off: only a hint, at most every few seconds.
+   * @returns {boolean} the wheel was used for the wah
+   */
+  function wheelWah(notches) {
+    if (!notches || !isAvailable('wah')) return false;
+    if (!model.isOn('wah')) {
+      if (time - wheelHintAt >= WHEEL_HINT_GAP) { wheelHintAt = time; toast(t('pedal.wheelWahOff')); }
+      return false;
+    }
+    if (model.param('wah', 'mode') >= 0.5) {
+      model.setParam('wah', 'mode', 0);
+      toast(t('pedal.wheelWahHand'));
+    }
+    wheelGlide.nudge(model.param('wah', 'position'), notches);
+    return true;
+  }
+
+  // Mouse wheel: over a knob it turns the knob (both modes); elsewhere on the stage in mouse mode
+  // it moves the wah pedal. The page never scrolls under the stage in mouse mode.
   function onWheel(event) {
-    if (!visible || !element) return;
-    const rect = element.getBoundingClientRect();
+    if (!visible) return;
+    const rect = element?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const target = hitTest(targetsNow(), point);
-    if (target?.kind !== 'knob') return;
-    event.preventDefault();
+    if (target?.kind !== 'knob') {
+      if (tuningOpen || !mouseMode()) return;
+      event.preventDefault?.();
+      wheelWah(wheelNotches(event));
+      return;
+    }
+    event.preventDefault?.();
     const def = target.def;
     const step = def?.steps ? Math.sign(-event.deltaY) / (def.steps.length - 1) : -event.deltaY * WHEEL_STEP;
     if (target.macro) model.setMacro(target.macro, target.value + step);
@@ -246,6 +294,8 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     targets: () => targetsNow(),
     knob: knobOf,
     isAvailable: id => isAvailable(id),
+    // The stage's wheel handler (tests call it with plain objects: clientX/Y, deltaX/Y, deltaMode).
+    wheel: onWheel,
     dispose() { element?.removeEventListener('wheel', onWheel); },
   };
 }

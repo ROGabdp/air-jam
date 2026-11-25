@@ -87,9 +87,11 @@ export function tuningTargets(stage, model, ui) {
     PRESETS.forEach((preset, i) => {
       button('preset', W / 2 + (i - (n - 1) / 2) * (w + gap), H * 0.31, w, h, { preset: preset.id, label: preset.label });
     });
-    const r = Math.min(H * 0.085, 72);
-    Object.keys(MACROS).forEach((name, i) => {
-      const cx = W / 2 + (i === 0 ? -1 : 1) * r * 2.3, cy = H * 0.5;
+    // Big knobs in a row: 破音程度, 明亮度, 延音.
+    const names = Object.keys(MACROS);
+    const r = Math.min(H * 0.085, 72, W * 0.8 / names.length / 3.1);
+    names.forEach((name, i) => {
+      const cx = W / 2 + (i - (names.length - 1) / 2) * r * 3.3, cy = H * 0.5;
       targets.push({ kind: 'knob', macro: name, cx, cy, r, rect: rectAround(cx, cy + r * 0.2, r * 3, r * 3), value: model.macro(name) });
     });
     const order = model.pedalOrder();
@@ -116,7 +118,16 @@ export function tuningTargets(stage, model, ui) {
   const moveSize = Math.max(48, H * 0.075);
   button('move', panelX + panelW - moveSize * 1.7, cy, moveSize, moveSize, { delta: -1, label: 'pedal.moveLeft', pedal: selected });
   button('move', panelX + panelW - moveSize * 0.55, cy, moveSize, moveSize, { delta: 1, label: 'pedal.moveRight', pedal: selected });
-  if (selected === AMP) return targets;
+  if (selected === AMP) {
+    // The amp has no switch (always on): its knobs (延音) in the middle of the panel.
+    const knobs = visibleKnobs(AMP, 'advanced');
+    const kr = Math.min(H * 0.065, 54);
+    knobs.forEach((knob, k) => {
+      const kx = W / 2 + (k - (knobs.length - 1) / 2) * kr * 4;
+      targets.push(knobTarget(AMP, knob, model, kx, cy, kr, rectAround(kx, cy + kr * 0.3, kr * 3.4, kr * 3.4)));
+    });
+    return targets;
+  }
 
   const sr = Math.min(H * 0.085, 70);
   targets.push({ kind: 'switch', pedal: selected, cx: panelX + sr * 1.3, cy, r: sr, rect: rectAround(panelX + sr * 1.3, cy + sr * 0.2, sr * 2.6, sr * 3) });

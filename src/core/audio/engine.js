@@ -1,7 +1,7 @@
 // Web Audio engine: song playback, plucked voices in parts (each part has its own tone and
 // effect-chain instance), voice limiting, chord-change chokes, the pedalboard's settings for the
 // electric rig, and output protection. Everything is timed on AudioContext.currentTime.
-import { createPluck } from './karplus.js';
+import { createPluck, sustainStretch } from './karplus.js';
 import { releaseTimeConstant, ceilingCurve } from './distortion.js';
 import { voiceParams, t60For } from './voice-params.js';
 import { rigFromSnapshot, electricTone } from './electric-rig.js';
@@ -238,13 +238,15 @@ export function createAudioEngine(settings, { context = null, master = true, str
     for (const p of parts.values()) {
       if (!p.tone?.rig) continue;
       automateWah(p, partWah(p).control.configure(rig.wah, ctx.currentTime));
+      // Voice-side settings (the 延音 knob) take effect from the next pluck; the chains only move
+      // when their stages changed.
+      p.tone = tone;
       if (p.rigKey === key) continue;
       for (const [chain, stages] of [[p.chain, tone.stages], [p.double?.chain, tone.double.stages]]) {
         if (!chain) continue;
         if (glide) chain.update(stages, { tau: PEDAL_TAU.knob });
         else chain.switchTo(stages, { fade: PEDAL_TAU.toggle });
       }
-      p.tone = tone;
       p.rigKey = key;
     }
     return rig;
@@ -457,7 +459,7 @@ export function createAudioEngine(settings, { context = null, master = true, str
     // Time constant (seconds) for visuals that should fade with the audible decay.
     ringTime: (freq, partName = 'rhythm') => {
       const tone = parts.get(partName)?.tone;
-      return tone ? t60For(freq, tone, settings) / 4.5 : 0.6;
+      return tone ? t60For(freq, tone, settings) / 4.5 * (tone.sustain > 0 ? sustainStretch(tone.sustain) : 1) : 0.6;
     },
     setTrim,
     releasePart,

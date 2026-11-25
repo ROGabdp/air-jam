@@ -311,6 +311,46 @@ test('hand buttons: with no buttons on screen every hand goes to the strings', (
   assert.equal(result.hands.length, 2);
 });
 
+// ---------- 延音 (the amp's sustain knob) on the tuning screen ----------
+test('延音: the third big knob in simple mode and the amp knob in advanced; mouse drag, pinch-drag and wheel turn it', () => {
+  const { board, find } = boardRig();
+  let time = 0;
+  const frame = hands => { time += 1 / 60; board.route(hands, time, 'ready'); };
+  const hold = (hands, seconds) => { for (let i = 0; i < seconds * 60; i++) frame(hands); };
+  const mouseDragReady = (a, b) => { frame([mouseHover(a)]); for (let i = 0; i <= 8; i++) frame(mouseDrag(a, { x: a.x, y: a.y + (b.y - a.y) * i / 8 })); frame([mouseHover(b)]); hold([], 0.5); };
+  frame([]);
+  board.openTuning();
+  const macros = board.targets().filter(t => t.kind === 'knob' && t.macro);
+  assert.deepEqual(macros.map(t => t.macro), ['drive', 'tone', 'sustain']);
+  for (let i = 1; i < macros.length; i++) assert.ok(macros[i - 1].rect.x + macros[i - 1].rect.w <= macros[i].rect.x + 1e-9, 'big knobs do not overlap');
+  const sustain = find(t => t.kind === 'knob' && t.macro === 'sustain');
+  assert.equal(board.model.param('amp', 'sustain'), 0);
+  mouseDragReady({ x: sustain.cx, y: sustain.cy }, { x: sustain.cx, y: sustain.cy - 150 });
+  const byMouse = board.model.param('amp', 'sustain');
+  assert.ok(byMouse > 0.2, `mouse drag: ${byMouse}`);
+  assert.equal(board.model.preset, 'rock', '延音 does not make the preset 自訂');
+  // Camera: open hand, pinch, drag up, let go.
+  const at = (dy, extra = {}) => [camHand('R', { x: sustain.cx, y: sustain.cy + dy }, extra)];
+  hold(at(0), 0.3);
+  for (let i = 0; i <= 20; i++) frame(at(-i * 8, { pinching: true }));
+  hold(at(-160), 0.2);
+  hold([], 0.5);
+  const byHand = board.model.param('amp', 'sustain');
+  assert.ok(byHand > byMouse + 0.2, `pinch-drag: ${byMouse} → ${byHand}`);
+  // Wheel over the knob.
+  board.wheel({ clientX: sustain.cx, clientY: sustain.cy, deltaX: 0, deltaY: 100, deltaMode: 0, preventDefault() {} });
+  assert.ok(board.model.param('amp', 'sustain') < byHand, 'wheel down turns it down');
+  // Advanced: the amp's panel has it.
+  board.model.setMode('advanced');
+  board.select('amp');
+  const ampKnob = find(t => t.kind === 'knob' && t.pedal === 'amp' && t.knob === 'sustain');
+  assert.ok(ampKnob, 'amp panel shows 延音');
+  const before = board.model.param('amp', 'sustain');
+  mouseDragReady({ x: ampKnob.cx, y: ampKnob.cy }, { x: ampKnob.cx, y: ampKnob.cy + 150 });
+  assert.ok(board.model.param('amp', 'sustain') < before - 0.2, 'advanced knob turns it');
+  return `mouse ${byMouse.toFixed(2)}, pinch ${byHand.toFixed(2)}`;
+});
+
 console.table(results);
 const failed = results.filter(r => r.result === 'FAIL').length;
 if (failed) { console.error(`${failed} test(s) failed`); process.exit(1); }

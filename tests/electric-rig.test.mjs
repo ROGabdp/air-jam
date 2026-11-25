@@ -8,15 +8,16 @@ import {
   LONG_STRING, NEAR_BRIDGE, AUTO_LEVEL_DB, FUZZ,
 } from '../src/core/audio/electric-rig.js';
 import { stageNumbers, shapeOf, driveDb, processStages, buildSwitchableStages } from '../src/core/audio/stages.js';
-import { createPluck, renderPluck, PEAK_WINDOW_SECONDS } from '../src/core/audio/karplus.js';
+import { createPluck, renderPluck, PEAK_WINDOW_SECONDS, sustainerSettings, sustainStretch } from '../src/core/audio/karplus.js';
 import { TONES } from '../src/core/audio/tones.js';
 import { LAB_COMBOS, LAB_AMP_THICK, BOOSTER as LAB_BOOSTER } from '../src/core/audio/tone-lab.js';
 import { voiceParams } from '../src/core/audio/voice-params.js';
 import { createAudioEngine, PLUCK_HEAD_SECONDS, PEDAL_TAU } from '../src/core/audio/engine.js';
 import { createPedalModel, PRESETS, PEDAL_TYPES, PEDAL_IDS, PEDALS_WITH_SOUND, knobOf, knobValue } from '../src/core/pedals/model.js';
-import { renderPart, seeded } from '../tools/tone-lab/model.mjs';
+import { renderPart, renderMaster, seeded } from '../tools/tone-lab/model.mjs';
+import { renderDemoSong } from '../src/core/song/demo-song.js';
 import { loudnessDb, driveSnapshot } from '../tools/tone-lab/calibrate-level.mjs';
-import { strum, A5, A5_EIGHT, rms, distortionProducts } from '../src/lab/metrics.js';
+import { strum, A5, A5_EIGHT, rms, distortionProducts, levelAt, peakOf } from '../src/lab/metrics.js';
 import { FakeAudioContext } from './fake-audio-context.mjs';
 import { SETTINGS } from '../src/settings.js';
 
@@ -270,7 +271,8 @@ test('switchable chain: a switch sets the silent copy at once and cross-fades; a
 // ---------- split pluck rendering (replaces a buffer cache) ----------
 test('split pluck: head + tail rendered in pieces equal the one-shot render exactly', () => {
   let cases = 0;
-  for (const tone of [TONES.electric, TONES.steel, LAB_COMBOS.labA]) {
+  const sustained = electricTone({ ...rigFromSnapshot(null), sustain: 1 });
+  for (const tone of [TONES.electric, TONES.steel, LAB_COMBOS.labA, sustained]) {
     for (const freq of [82.4, 110, 164.8, 440, 1318]) {
       for (const velocity of [0.1, 0.6, 1]) {
         const { render } = voiceParams(tone, { freq, velocity, position: 0.3 }, SETTINGS);
@@ -389,6 +391,159 @@ test('engine: main-thread time per 8-string strum, whole buffers vs head only (N
   const whole = time(false), head = time(true);
   assert.ok(head < whole * 0.5, `head ${head.toFixed(2)} ms vs whole ${whole.toFixed(2)} ms`);
   return `whole ${whole.toFixed(1)} ms → head ${head.toFixed(1)} ms per strum (tails later, ≤ 4 ms slices, most never rendered)`;
+});
+
+// ---------- 延音 (sustain knob) ----------
+const sustainSnapshot = (preset, sustain) => { const m = createPedalModel(); m.applyPreset(preset); m.setParam('amp', 'sustain', sustain); return m.snapshot(); };
+const sustainTone = (preset, sustain) => electricTone(rigFromSnapshot(sustainSnapshot(preset, sustain)));
+// −10 / −20 dB times of one 4-string A5 strum (velocity 0.6), as src/lab/metrics.js measureSustain.
+function decayTimes(tone, seconds = 9) {
+  const out = renderPart(tone, strum(A5.slice(0, 4), { velocity: 0.6 }), { duration: seconds, settings: SETTINGS, sampleRate: 44100, seed: 3 });
+  let ref = -Infinity;
+  for (let t = 0.05; t <= 0.3; t += 0.01) ref = Math.max(ref, levelAt(out, t, 0.025));
+  const below = drop => { for (let t = 0.1; t < seconds - 0.05; t += 0.01) if (levelAt(out, t, 0.025) < ref - drop) return t; return seconds - 0.05; };
+  return [below(10), below(20)];
+}
+
+test('sustain: the knob lengthens the decay monotonically (clean, 搖滾); 0 is the plain string', () => {
+  const rows = [];
+  for (const preset of ['clean', 'rock']) {
+    let previous = 0;
+    const times = [];
+    for (const sustain of [0, 0.5, 1]) {
+      const [ten, twenty] = decayTimes(sustainTone(preset, sustain));
+      assert.ok(ten > previous + 0.3, `${preset} ${sustain}: −10 dB at ${ten.toFixed(2)} s after ${previous.toFixed(2)} s`);
+      assert.ok(twenty > ten);
+      previous = ten;
+      times.push(`${ten.toFixed(2)}/${twenty.toFixed(2)}`);
+    }
+    rows.push(`${preset} ${times.join(' → ')} s`);
+  }
+  const [cleanMax] = decayTimes(sustainTone('clean', 1));
+  assert.ok(cleanMax >= 2.4, `clean at max rings like 搖滾 at default: ${cleanMax.toFixed(2)} s`);
+  return `−10/−20 dB at 延音 0 / 0.5 / 1: ${rows.join('; ')}`;
+});
+
+test('sustain: at the default (0) every preset is exactly what it was (stages, voice params, samples)', () => {
+  const model = createPedalModel();
+  assert.equal(model.param('amp', 'sustain'), 0, 'default off');
+  for (const preset of PRESETS) {
+    const before = presetSnapshot(preset.id);
+    const old = { ...before }; delete old.amp;                    // a snapshot from before the amp had knobs
+    const tone = electricTone(rigFromSnapshot(before));
+    assert.equal(tone.sustain, 0);
+    assert.deepEqual(rigStages(rigFromSnapshot(before)), rigStages(rigFromSnapshot(old)), preset.id);
+    const { render } = voiceParams(tone, { freq: 110, velocity: 0.6 }, SETTINGS);
+    assert.equal('sustain' in render, false, 'no sustain option at 0');
+    const a = renderPluck({ ...render, sampleRate: 44100, random: seeded(9) });
+    const b = renderPluck({ ...render, sustain: 0, sampleRate: 44100, random: seeded(9) });
+    assert.deepEqual(a, b);
+    // The knob only touches the strings, never the chain.
+    assert.deepEqual(rigStages(rigFromSnapshot(sustainSnapshot(preset.id, 1))), rigStages(rigFromSnapshot(before)), `${preset.id}: chain unchanged`);
+  }
+  assert.equal(electricTone(rigFromSnapshot(null)).sustain, 0, 'no pedalboard: 丁 as before');
+});
+
+test('sustain: the attack passes untouched; the buffer never exceeds its peak; length stretches with the make-up', () => {
+  for (const freq of [82.4, 196, 659]) {
+    const base = { freq, t60: 4, damping: 0.15, brightness: 0.8, pickPosition: 0.15, maxSeconds: 6, sampleRate: 44100 };
+    const plain = renderPluck({ ...base, random: seeded(4) });
+    const held = renderPluck({ ...base, sustain: 1, random: seeded(4) });
+    assert.ok(Math.abs(held.length / plain.length - sustainStretch(1)) < 0.01, `${freq}: length ×${(held.length / plain.length).toFixed(3)}`);
+    let peak = 0;
+    for (const v of held) peak = Math.max(peak, Math.abs(v));
+    assert.ok(peak <= 1 + 1e-6, `${freq}: peak ${peak}`);
+    for (let i = 0; i < 441; i++) assert.ok(Math.abs(held[i] - plain[i]) < 0.02, `${freq}: first 10 ms changed at ${i}`);
+  }
+  const { ratio, makeupDb } = sustainerSettings(1);
+  return `max: ratio ${ratio}, make-up ≤ ${makeupDb} dB, rendered ×${sustainStretch(1).toFixed(2)} longer`;
+});
+
+// The strum choke of a driven tone takes a few ms longer with 延音 (the clippers get a hotter, more
+// fundamental-heavy signal and the amp's low filters ring out after it): checked at 50 ms, reported at 30.
+test('sustain: at max the chord-change choke is still ≥ 40 dB at 80 ms; a new strum still clears it by 50 ms', () => {
+  const rows = [];
+  for (const preset of ['clean', 'rock', 'metal']) {
+    const depth = sustain => {
+      const tone = sustainTone(preset, sustain);
+      const out = renderPart(tone, strum(A5_EIGHT, { velocity: 1 }), { duration: 0.6, chokes: [{ time: 0.4, keep: [] }], settings: SETTINGS, sampleRate: 44100, seed: 2 });
+      const chord = -db(rms(out, 0.48, 0.49) / rms(out, 0.38, 0.4));
+      const s = renderPart(tone, strum(A5_EIGHT, { velocity: 1 }), { duration: 0.6, chokes: [{ time: 0.4, all: true, fade: tone.strumChoke }], settings: SETTINGS, sampleRate: 44100, seed: 2 });
+      const at = ms => -db(rms(s, 0.4 + ms / 1000, 0.41 + ms / 1000) / rms(s, 0.38, 0.4));
+      return { chord, strumDepth: at(tone.strumChoke * 1000), at50: at(50) };
+    };
+    const off = depth(0), max = depth(1);
+    assert.ok(max.chord >= 40, `${preset}: chord choke ${max.chord.toFixed(1)} dB`);
+    assert.ok(max.at50 >= 40, `${preset}: strum choke at 50 ms ${max.at50.toFixed(1)} dB`);
+    rows.push(`${preset} ${max.chord.toFixed(0)} dB (strum at 30 ms ${off.strumDepth.toFixed(0)} → ${max.strumDepth.toFixed(0)}, at 50 ms ${max.at50.toFixed(0)})`);
+  }
+  return `chord choke at 80 ms with 延音 max (strum choke default → max): ${rows.join(', ')}`;
+});
+
+test('sustain: ringing chords at max against the demo song stay safe (peak ≤ 0.99, limiter ≤ 3 dB)', () => {
+  const rate = 44100, seconds = 8;
+  const demo = renderDemoSong(rate).samples;
+  const song = { left: demo.slice(rate * 4, rate * (4 + seconds)), right: demo.slice(rate * 4, rate * (4 + seconds)) };
+  const rows = [];
+  for (const preset of ['clean', 'rock', 'metal']) {
+    // One 8-string strum per bar (100 BPM), chord changes on the bar, nothing kept.
+    const events = [], chokes = [];
+    for (let bar = 0; bar < 4; bar++) {
+      const time = bar * 2.4;
+      if (bar) chokes.push({ time, keep: [] });
+      events.push(...strum(A5_EIGHT, { time, velocity: 0.8 }));
+    }
+    const part = renderPart(sustainTone(preset, 1), events, { duration: seconds, chokes, settings: SETTINGS, sampleRate: rate, seed: 6 });
+    const mix = renderMaster(part, song, { sampleRate: rate, settings: SETTINGS });
+    let limiter = 0;
+    for (let i = rate; i < mix.reductionDb.length; i++) limiter = Math.min(limiter, mix.reductionDb[i]);
+    const peak = peakOf(mix);
+    assert.ok(peak <= 0.99, `${preset}: peak ${peak}`);
+    assert.ok(-limiter <= 3, `${preset}: limiter ${(-limiter).toFixed(1)} dB`);
+    rows.push(`${preset} ${peak.toFixed(3)} / ${(-limiter).toFixed(1)} dB`);
+  }
+  return `peak / limiter: ${rows.join(', ')}`;
+});
+
+test('sustain: the engine picks the knob up for the next pluck without touching the chain', () => {
+  const { ctx, engine } = engineWith();
+  engine.setTone(TONES.electric);
+  const nodes = ctx.created.length;
+  engine.applyPedals(presetSnapshot('rock'));
+  assert.equal(engine.tone.sustain, 0);
+  engine.applyPedals(sustainSnapshot('rock', 0.8), { type: 'param', id: 'amp', knob: 'sustain', value: 0.8, commit: true });
+  assert.equal(engine.tone.sustain, 0.8);
+  assert.equal(ctx.created.length, nodes, 'no node created or rebuilt');
+  ctx.currentTime = 1;
+  const before = ctx.sources.length;
+  engine.pluck({ freq: 110, velocity: 0.6 });
+  engine.flushTails();
+  const lengths = ctx.sources.slice(before).reduce((n, s) => n + s.buffer.length, 0);
+  const { render } = voiceParams(engine.tone, { freq: 110, velocity: 0.6 }, SETTINGS);
+  assert.equal(render.sustain, 0.8);
+  const plain = createPluck({ ...render, sustain: 0, sampleRate: ctx.sampleRate }).length * 2;
+  assert.ok(lengths > plain * 1.2, `sustained notes render longer: ${lengths} vs ${plain} samples`);
+});
+
+test('sustain: main-thread time per 8-string strum at max stays near the default (Node, fake context)', () => {
+  const time = sustain => {
+    const ctx = new FakeAudioContext();
+    const engine = createAudioEngine(SETTINGS, { context: ctx, streaming: true });
+    engine.setTone(TONES.electric);
+    engine.applyPedals(sustainSnapshot('rock', sustain));
+    let total = 0;
+    for (let k = 0; k < 14; k++) {
+      ctx.currentTime = k * 0.4;
+      const t0 = performance.now();
+      for (const freq of A5_EIGHT) engine.pluck({ freq, velocity: 0.7 });
+      if (k >= 4) total += performance.now() - t0;
+    }
+    return total / 10;
+  };
+  time(0); time(1);                       // warm up
+  const off = time(0), max = time(1);
+  assert.ok(max < off * 1.6 + 1, `max ${max.toFixed(2)} ms vs default ${off.toFixed(2)} ms`);
+  return `head per strum: default ${off.toFixed(2)} ms, 延音 max ${max.toFixed(2)} ms (tails later in ≤ 4 ms slices)`;
 });
 
 console.table(results);

@@ -41,5 +41,7 @@ export function voiceParams(tone, { freq, velocity = 0.6, position = 0.5 }, sett
     pickPosition,
   };
   if (tone.string.maxSeconds) render.maxSeconds = tone.string.maxSeconds;
+  // The electric rig's 延音 knob (karplus.js SUSTAINER); absent = the plain string.
+  if (tone.sustain > 0) render.sustain = tone.sustain;
   return { render, gain: 0.22 + 0.78 * v * v };
 }

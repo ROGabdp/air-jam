@@ -92,6 +92,18 @@ export const PEDAL_TYPES = {
   },
 };
 
+// The amp is always on and has no footswitch; its knobs live on the board, not in a pedal.
+// 延音 (sustain, src/core/audio/karplus.js SUSTAINER): 0 = off, today's sound; it is a playing
+// preference like the wah position, so presets keep it and changing it does not make the preset
+// 自訂. In simple mode it is the third big knob of the tuning screen (MACROS.sustain); in advanced
+// mode it is on the amp's panel.
+export const AMP_TYPE = {
+  label: 'pedal.amp', icon: 'amp',
+  knobs: [
+    { id: 'sustain', label: 'pedal.knob.sustain', min: 0, max: 100, unit: '%', default: 0, simple: true },
+  ],
+};
+
 // Presets (names from the owner). Each lists the pedals that are on and the knobs that differ from
 // their defaults. Values: src/core/audio/electric-rig.js (搖滾 is the tone lab's 丁; 重金屬 goes past
 // it into the fuzz end of the distortion), measured with tools/tone-lab/measure.mjs. Pedals without
@@ -108,13 +120,15 @@ export const DEFAULT_PRESET = 'rock';
 export const MACROS = {
   drive: { label: 'pedal.macro.drive', targets: [['overdrive', 'drive'], ['distortion', 'drive']] },
   tone: { label: 'pedal.macro.tone', targets: [['overdrive', 'tone'], ['distortion', 'tone']] },
+  sustain: { label: 'pedal.macro.sustain', targets: [[AMP, 'sustain']] },
 };
 
-export const knobOf = (pedalId, knobId) => PEDAL_TYPES[pedalId]?.knobs.find(k => k.id === knobId) ?? null;
+const typeOf = id => (id === AMP ? AMP_TYPE : PEDAL_TYPES[id]);
+export const knobOf = (pedalId, knobId) => typeOf(pedalId)?.knobs.find(k => k.id === knobId) ?? null;
 
 // Knobs drawn as knobs for a mode (the wah position lives on the edge strip, not on a knob).
 export function visibleKnobs(pedalId, mode) {
-  return PEDAL_TYPES[pedalId].knobs.filter(k => !k.hidden && (mode === 'advanced' ? k.advanced !== false : k.simple));
+  return typeOf(pedalId).knobs.filter(k => !k.hidden && (mode === 'advanced' ? k.advanced !== false : k.simple));
 }
 
 export function snapKnob(knob, value) {
@@ -140,6 +154,12 @@ function defaultPedal(id) {
   return { on: false, params };
 }
 
+function defaultAmp() {
+  const params = {};
+  for (const knob of AMP_TYPE.knobs) params[knob.id] = knob.default;
+  return { params };
+}
+
 function presetPedals(presetId) {
   const preset = PRESETS.find(p => p.id === presetId) ?? PRESETS.find(p => p.id === DEFAULT_PRESET);
   const pedals = {};
@@ -154,7 +174,7 @@ function presetPedals(presetId) {
 }
 
 export function defaultBoard() {
-  return { mode: 'simple', preset: DEFAULT_PRESET, order: [...STANDARD_ORDER], pedals: presetPedals(DEFAULT_PRESET) };
+  return { mode: 'simple', preset: DEFAULT_PRESET, order: [...STANDARD_ORDER], pedals: presetPedals(DEFAULT_PRESET), amp: defaultAmp() };
 }
 
 const isPermutation = order => Array.isArray(order) && order.length === STANDARD_ORDER.length
@@ -163,7 +183,7 @@ const isPermutation = order => Array.isArray(order) && order.length === STANDARD
 export function serializeBoard(board) {
   const pedals = {};
   for (const id of PEDAL_IDS) pedals[id] = { on: board.pedals[id].on, params: { ...board.pedals[id].params } };
-  return { v: 1, mode: board.mode, preset: board.preset, order: [...board.order], pedals };
+  return { v: 1, mode: board.mode, preset: board.preset, order: [...board.order], pedals, amp: { params: { ...board.amp.params } } };
 }
 
 // Accepts anything (old versions, hand-edited storage, garbage) and returns a valid board.
@@ -181,6 +201,11 @@ export function deserializeBoard(data) {
       const value = saved.params?.[knob.id];
       if (typeof value === 'number' && Number.isFinite(value)) board.pedals[id].params[knob.id] = snapKnob(knob, value);
     }
+  }
+  // Boards saved before the amp had knobs have no `amp`: defaults (延音 off).
+  for (const knob of AMP_TYPE.knobs) {
+    const value = data.amp?.params?.[knob.id];
+    if (typeof value === 'number' && Number.isFinite(value)) board.amp.params[knob.id] = snapKnob(knob, value);
   }
   return board;
 }
@@ -215,12 +240,15 @@ export function boardSnapshot(board) {
     pedals[id] = { on, sound: PEDALS_WITH_SOUND.includes(id), params: { ...params }, values };
   }
   const simple = board.mode === 'simple';
+  const ampValues = {};
+  for (const knob of AMP_TYPE.knobs) ampValues[knob.id] = knobValue(knob, board.amp.params[knob.id]);
   return {
     mode: board.mode,
     autoLevel: simple,
     preset: board.preset,
     order: simple ? [...STANDARD_ORDER] : [...board.order],
     pedals,
+    amp: { params: { ...board.amp.params }, values: ampValues },
   };
 }
 
@@ -244,9 +272,10 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
     }
   }
 
+  const paramsOf = id => (id === AMP ? board.amp.params : board.pedals[id]?.params);
   const macroValue = name => {
     const targets = MACROS[name].targets;
-    return targets.reduce((sum, [id, knob]) => sum + board.pedals[id].params[knob], 0) / targets.length;
+    return targets.reduce((sum, [id, knob]) => sum + paramsOf(id)[knob], 0) / targets.length;
   };
 
   const api = {
@@ -257,7 +286,7 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
     // Pedals in chain order, without the amp (the footswitch row).
     pedalOrder: () => boardSnapshot(board).order.filter(id => id !== AMP),
     isOn: id => board.pedals[id]?.on === true,
-    param: (id, knob) => board.pedals[id]?.params[knob],
+    param: (id, knob) => paramsOf(id)?.[knob],
 
     toggle(id, on) {
       if (!board.pedals[id]) return false;
@@ -272,11 +301,13 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
     setParam(id, knobId, value, { commit = true } = {}) {
       const knob = knobOf(id, knobId);
       if (!knob) return null;
+      const params = paramsOf(id);
       const next = snapKnob(knob, value);
-      const changed = next !== board.pedals[id].params[knobId];
-      board.pedals[id].params[knobId] = next;
-      // The wah position is a performance control, not part of the sound a preset describes.
-      if (changed && knobId !== 'position') board.preset = null;
+      const changed = next !== params[knobId];
+      params[knobId] = next;
+      // The wah position and the amp's 延音 are playing controls, not part of the sound a preset
+      // describes.
+      if (changed && knobId !== 'position' && id !== AMP) board.preset = null;
       if (changed || commit) emit({ type: 'param', id, knob: knobId, value: next, commit }, commit);
       return next;
     },
@@ -286,7 +317,7 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
       const knob = knobOf(id, knobId);
       if (!knob?.steps) return null;
       const n = knob.steps.length - 1;
-      return api.setParam(id, knobId, ((stepIndex(knob, board.pedals[id].params[knobId]) + 1) % (n + 1)) / n);
+      return api.setParam(id, knobId, ((stepIndex(knob, paramsOf(id)[knobId]) + 1) % (n + 1)) / n);
     },
 
     applyPreset(presetId) {
@@ -318,7 +349,7 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
 
     macro: macroValue,
     macroBase(name) {
-      return { mean: macroValue(name), values: MACROS[name].targets.map(([id, knob]) => board.pedals[id].params[knob]) };
+      return { mean: macroValue(name), values: MACROS[name].targets.map(([id, knob]) => paramsOf(id)[knob]) };
     },
     // Moves every target by the same amount from where they were when the drag started (base), so
     // the knobs keep their offsets and clamping at one end never makes the others drift.

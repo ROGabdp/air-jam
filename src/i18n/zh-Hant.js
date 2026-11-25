@@ -114,7 +114,7 @@ export default {
   'status.mouse': '滑鼠模式',
 
   'help.camera': '雙手捏住拉開＝拉弦　食指劃過＝撥弦　握拳停在弦上＝刪除　雙手握拳＝清空',
-  'help.mouse': '拖曳＝拉弦　移動滑鼠穿過弦＝撥弦　右鍵＝刪除',
+  'help.mouse': '拖曳＝拉弦　移動滑鼠穿過弦＝撥弦　右鍵＝刪除　滾輪＝娃娃音',
 
   'judge.perfect': 'Perfect',
   'judge.good': 'Good',

@@ -127,7 +127,7 @@ export async function measureTone({ render, tone, settings, song = null, repeats
   const mean = values => values.reduce((s, v) => s + v, 0) / values.length;
 
   // 1. Level drop 0.03 → 0.5 s: one 4-string strum at velocity 0.3, crossing the middle.
-  const drops = [], quiet = [], loud = [], sustains = [];
+  const drops = [], quiet = [], loud = [];
   for (let r = 0; r < repeats; r++) {
     const out = await render({ tone, events: strum(four, { velocity: 0.3 }), duration: 0.7 });
     drops.push(levelAt(out, 0.03) - levelAt(out, 0.5));
@@ -163,22 +163,8 @@ export async function measureTone({ render, tone, settings, song = null, repeats
   result.chokeDepth = -mean(chokeDrops);
   result.strumChokeDepth = strumDrops.length ? -mean(strumDrops) : null;
 
-  // 5. Sustain: one 4-string strum at velocity 0.6; time until the output is 10 (and 20) dB below
-  //    its loudest point in the first 0.3 s.
-  const sustains20 = [];
-  for (let r = 0; r < Math.max(2, repeats / 2); r++) {
-    const out = await render({ tone, events: strum(four, { velocity: 0.6 }), duration: 6.5 });
-    let ref = -Infinity;
-    for (let t = 0.05; t <= 0.3; t += 0.01) ref = Math.max(ref, levelAt(out, t, 0.025));
-    const below = drop => {
-      for (let t = 0.1; t < 6.45; t += 0.01) if (levelAt(out, t, 0.025) < ref - drop) return t;
-      return 6.45;
-    };
-    sustains.push(below(10));
-    sustains20.push(below(20));
-  }
-  result.sustain = mean(sustains);
-  result.sustain20 = mean(sustains20);
+  // 5. Sustain (measureSustain).
+  Object.assign(result, await measureSustain({ render, tone, repeats: Math.max(2, repeats / 2) }));
 
   // 6. Eighth-note A5 4-string strumming at medium velocity: low-band share at the chain output,
   //    then against the song through the master bus: guitar vs song RMS, peak, limiter reduction.
@@ -204,6 +190,29 @@ export async function measureTone({ render, tone, settings, song = null, repeats
   // 8. Crunch: how broken the sound is, from a two-tone test through the chain (see distortionProducts).
   if (tone.stages) Object.assign(result, distortionProducts(tone.stages));
   return result;
+}
+
+/**
+ * Sustain: one 4-string A5 strum at velocity 0.6; time until the output is 10 (and 20) dB below its
+ * loudest point in the first 0.3 s (mean over `repeats`; `seconds` - 0.05 when it never gets there).
+ * @returns {Promise<{ sustain: number, sustain20: number }>}
+ */
+export async function measureSustain({ render, tone, repeats = 3, seconds = 6.5 }) {
+  const four = A5.slice(0, 4);
+  const tens = [], twenties = [];
+  for (let r = 0; r < repeats; r++) {
+    const out = await render({ tone, events: strum(four, { velocity: 0.6 }), duration: seconds });
+    let ref = -Infinity;
+    for (let t = 0.05; t <= 0.3; t += 0.01) ref = Math.max(ref, levelAt(out, t, 0.025));
+    const below = drop => {
+      for (let t = 0.1; t < seconds - 0.05; t += 0.01) if (levelAt(out, t, 0.025) < ref - drop) return t;
+      return seconds - 0.05;
+    };
+    tens.push(below(10));
+    twenties.push(below(20));
+  }
+  const mean = values => values.reduce((s, v) => s + v, 0) / values.length;
+  return { sustain: mean(tens), sustain20: mean(twenties) };
 }
 
 /**

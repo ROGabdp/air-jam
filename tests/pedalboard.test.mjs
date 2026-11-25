@@ -563,6 +563,32 @@ test('mouse: a click shorter than one frame is still seen pressed for one poll',
   assert.equal(mouse.poll()[0].pinching, false);
 });
 
+// ---------- 延音 (the amp's knob) in the model ----------
+test('延音: off by default; saved and loaded; presets keep it and it never makes the preset 自訂; reset clears it', () => {
+  const storage = memoryStorage();
+  const model = createPedalModel({ storage });
+  assert.equal(model.param('amp', 'sustain'), 0);
+  assert.deepEqual(model.snapshot().amp, { params: { sustain: 0 }, values: { sustain: 0 } });
+  model.setParam('amp', 'sustain', 0.7);
+  assert.equal(model.preset, 'rock', 'still 搖滾');
+  assert.equal(model.macro('sustain'), 0.7);
+  model.applyPreset('clean');
+  assert.equal(model.param('amp', 'sustain'), 0.7, 'kept across presets');
+  const reloaded = createPedalModel({ storage });
+  assert.equal(reloaded.param('amp', 'sustain'), 0.7, 'saved');
+  assert.equal(reloaded.snapshot().amp.values.sustain, 70);
+  // Boards saved before the amp had knobs, and garbage, load as off.
+  const old = serializeBoard(defaultBoard());
+  delete old.amp;
+  assert.equal(deserializeBoard(old).amp.params.sustain, 0);
+  assert.equal(deserializeBoard({ ...old, amp: { params: { sustain: 'loud' } } }).amp.params.sustain, 0);
+  assert.equal(deserializeBoard({ ...old, amp: { params: { sustain: 4 } } }).amp.params.sustain, 1, 'clamped');
+  model.setMacro('sustain', 0.2);
+  assert.equal(model.param('amp', 'sustain'), 0.2, 'the macro is the amp knob');
+  model.reset();
+  assert.equal(model.param('amp', 'sustain'), 0);
+});
+
 console.table(results);
 const failed = results.filter(r => r.result === 'FAIL').length;
 if (failed) { console.error(`${failed} test(s) failed`); process.exit(1); }
