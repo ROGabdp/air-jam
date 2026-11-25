@@ -5,6 +5,7 @@
 
 import { WAH_RANGES, WAH_DEFAULT_KNOBS } from '../audio/wah.js';
 import { CHORUS_RANGES, CHORUS_DEFAULT_KNOBS } from '../audio/post-fx/chorus.js';
+import { REVERB_SIZES, REVERB_RANGES, REVERB_DEFAULT_KNOBS } from '../audio/post-fx/reverb.js';
 
 const clamp01 = v => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 
@@ -17,7 +18,7 @@ export const MODES = ['simple', 'advanced'];
 export const MAX_SIMPLE_KNOBS = 2;
 // Pedals whose sound (DSP) exists. The others are kept in the model and drawn, but make no sound yet
 // (owner decision: staged later); snapshots carry `sound: false` for them so a view can say so.
-export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion', 'chorus'];
+export const PEDALS_WITH_SOUND = ['wah', 'overdrive', 'distortion', 'chorus', 'reverb'];
 
 const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 'dB', default: 0.67, simple: false };
 
@@ -86,12 +87,16 @@ export const PEDAL_TYPES = {
       level,
     ],
   },
+  // Reverb (src/core/audio/post-fx/reverb.js): simple = 大小 (four rooms, 0.5–3.6 s) and 混合;
+  // advanced adds 音色 (wet low-pass), 預延遲, 低頻切除 (wet high-pass) and 音量 (wet level).
   reverb: {
     label: 'pedal.reverb', hue: 250, icon: 'reverb',
     knobs: [
-      { id: 'size', label: 'pedal.knob.size', min: 0, max: 2, unit: '', default: 0.5, simple: true, steps: ['pedal.step.small', 'pedal.step.medium', 'pedal.step.large'] },
-      { id: 'mix', label: 'pedal.knob.mix', min: 0, max: 35, unit: '%', default: 0.4, simple: true },
-      { id: 'tone', label: 'pedal.knob.tone', min: 0, max: 1, unit: '', default: 0.5, simple: false },
+      { id: 'size', label: 'pedal.knob.size', min: 0, max: REVERB_SIZES.length - 1, unit: '', default: REVERB_DEFAULT_KNOBS.size, simple: true, steps: REVERB_SIZES.map(s => s.label) },
+      { id: 'mix', label: 'pedal.knob.mix', min: REVERB_RANGES.mix[0], max: REVERB_RANGES.mix[1], unit: '%', default: REVERB_DEFAULT_KNOBS.mix, simple: true },
+      { id: 'tone', label: 'pedal.knob.tone', min: REVERB_RANGES.toneHz[0], max: REVERB_RANGES.toneHz[1], unit: 'Hz', curve: 'log', default: REVERB_DEFAULT_KNOBS.tone, simple: false },
+      { id: 'preDelay', label: 'pedal.knob.preDelay', min: REVERB_RANGES.preDelayMs[0], max: REVERB_RANGES.preDelayMs[1], unit: 'ms', default: REVERB_DEFAULT_KNOBS.preDelay, simple: false },
+      { id: 'lowCut', label: 'pedal.knob.lowCut', min: REVERB_RANGES.lowCutHz[0], max: REVERB_RANGES.lowCutHz[1], unit: 'Hz', curve: 'log', default: REVERB_DEFAULT_KNOBS.lowCut, simple: false },
       level,
     ],
   },

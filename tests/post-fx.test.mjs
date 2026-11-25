@@ -73,16 +73,9 @@ test('order: chorus → delay → reverb, slot n output = slot n+1 input', () =>
   assert.equal(bus.slots.at(-1).output, bus.output);
 });
 
-// The bus itself (wiring only): every slot a transparent stub, as the modules were before their DSP.
-const bypassModules = Object.fromEntries(POST_FX_ORDER.map(id => [id, {
-  id,
-  paramsFromSnapshot: POST_FX_MODULES[id].paramsFromSnapshot,
-  create: (ctx, { input, output }) => { input.connect(output); return { apply() {}, dispose() { input.disconnect(output); } }; },
-}]));
-
-test('bypass: one path of unity gains, no automation, nothing else (bit-exact)', () => {
+test('bus wiring with bypass stubs: one path of unity gains, no automation, nothing else (bit-exact)', () => {
   const ctx = new FakeAudioContext();
-  const bus = createPostFxBus(ctx, { modules: bypassModules });
+  const bus = createPostFxBus(ctx, { modules: spies().modules });
   bus.apply(postFxParams(soundingSnapshot()), { type: 'load' });   // stubs ignore even "on"
   bus.setTempo({ pulseSeconds: 0.286, beatSeconds: 0.571 });
   bus.onChordChange(1); bus.onStrum(1, 0.8);
@@ -104,10 +97,45 @@ test('bypass: one path of unity gains, no automation, nothing else (bit-exact)',
   assert.equal(bus.input.outputs.size, 0);
 });
 
-test('bypass (Node model): every pedal off — processPostFx and renderPart with post are sample-exact', () => {
+// A dry path from `from` to `to` made only of gains at exactly 1 with no automation (or null).
+const isUnity = n => n.kind === 'gain' && n.gain.value === 1 && paramCalls(n).length === 0;
+function unityPath(from, to, path = []) {
+  if (!isUnity(from)) return null;
+  if (from === to) return [...path, from];
+  for (const next of from.outputs) {
+    if (path.includes(next)) continue;
+    const found = unityPath(next, to, [...path, from]);
+    if (found) return found;
+  }
+  return null;
+}
+
+test('bypass with the real modules, every pedal off: each slot is a unity dry path; every wet return is a gain at exactly 0', () => {
+  const ctx = new FakeAudioContext();
+  const bus = createPostFxBus(ctx);
+  bus.apply(postFxParams(soundingSnapshot({})), { type: 'load' });   // sounding pedals, all off
+  bus.setTempo({ pulseSeconds: 0.286, beatSeconds: 0.571 });
+  bus.onChordChange(1); bus.onStrum(1, 0.8);
+  for (const slot of bus.slots) {
+    const dry = unityPath(slot.input, slot.output);
+    assert.ok(dry, `${slot.id}: unity dry path input → output, no automation`);
+    for (const n of dry.slice(1)) {
+      const into = ctx.created.filter(m => !dry.includes(m) && m.outputs.has(n));
+      for (const m of into) {
+        assert.equal(m.kind, 'gain', `${slot.id}: wet return is a gain`);
+        assert.equal(m.gain.value, 0, `${slot.id}: wet return closed`);
+        assert.equal(paramCalls(m).length, 0, `${slot.id}: wet return not automated while off`);
+      }
+    }
+  }
+  bus.dispose();
+  assert.equal(bus.input.outputs.size, 0);
+});
+
+test('bypass (Node model): processPostFx and renderPart with post are sample-exact when off', () => {
   const left = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i / 7) * 0.7);
   const right = Float32Array.from(left, x => -x * 0.5);
-  const out = processPostFx(postFxParams(soundingSnapshot({})), { left, right }, { sampleRate: 48000 });   // all off
+  const out = processPostFx(postFxParams(soundingSnapshot({})), { left, right }, { sampleRate: 48000 });
   assert.deepEqual(out.left, left); assert.deepEqual(out.right, right);
   const events = [0, 0.01, 0.02, 0.5].map((time, i) => ({ time, freq: 110 * (i + 1), velocity: 0.7 }));
   const tone = TONES.electric;
@@ -121,7 +149,9 @@ test('paramsFromSnapshot: off without snapshot, for pedals without sound, and wh
   for (const id of POST_FX_ORDER) {
     const read = POST_FX_MODULES[id].paramsFromSnapshot;
     assert.equal(read(null).on, false);
-    assert.equal(read(createPedalModel().snapshot()).on, false, 'no sound yet');
+    const silent = createPedalModel().snapshot();
+    silent.pedals[id].on = true; silent.pedals[id].sound = false;
+    assert.equal(read(silent).on, false, 'no sound');
     assert.equal(read(soundingSnapshot({})).on, false);
     const on = read(soundingSnapshot());
     assert.equal(on.on, true);

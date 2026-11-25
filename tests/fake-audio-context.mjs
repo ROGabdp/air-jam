@@ -54,7 +54,7 @@ export class FakeAudioContext {
     return n;
   }
   createDelay(maxDelayTime = 1) { const n = new FakeNode(this, 'delay', { delayTime: 0 }); n.maxDelayTime = maxDelayTime; return n; }
-  createConvolver() { const n = new FakeNode(this, 'convolver'); n.buffer = null; return n; }
+  createConvolver() { const n = new FakeNode(this, 'convolver'); n.buffer = null; n.normalize = true; return n; }
   createConstantSource() {
     const n = new FakeNode(this, 'constant', { offset: 1 });
     n.startedAt = null;
