@@ -22,6 +22,7 @@ export function createHud() {
   };
   const shown = { score: -1, combo: -1, chord: undefined, next: undefined, beatsLeft: -1, beat: -1 };
   let toastTimer = 0;
+  let helpExtra = [];
 
   const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 
@@ -41,7 +42,9 @@ export function createHud() {
 
     setModeHint(mouse) { setText(el.modeHint, t(mouse ? 'intro.modeMouse' : 'intro.modeCamera')); },
     setIntroMessage(text) { setText(el.introMessage, text); },
-    setHelp(mouse) { el.help.innerHTML = `${t(mouse ? 'help.mouse' : 'help.camera')}<br>${t('help.keys')}<br>${t('help.tempoKeys')}`; },
+    setHelp(mouse) { el.help.innerHTML = [t(mouse ? 'help.mouse' : 'help.camera'), t('help.keys'), t('help.tempoKeys'), ...helpExtra].join('<br>'); },
+    // Extra help lines from optional features (e.g. the pedalboard); applied on the next setHelp.
+    setHelpExtra(lines) { helpExtra = lines; },
     setMetronome(on) { el.metronome.classList.toggle('on', on); el.metronome.setAttribute('aria-pressed', String(on)); },
     setStatus(text) { setText(el.status, text); },
     setSongInfo(text) { setText(el.songInfo, text); },

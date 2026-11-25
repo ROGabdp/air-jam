@@ -40,6 +40,18 @@ export const SETTINGS = {
   chordLookahead: 40,      // ms the displayed/snapped chord leads the audio
   comboIdleBeats: 8,       // beats without a scored hit before the combo quietly resets
   maxSongMinutes: 15,      // longer files are refused (decoded audio is ~23 MB per stereo minute)
+
+  // Pedalboard UI (src/core/pedals/; on with ?pedals=1 until the owner approves). No effects DSP yet.
+  pedals: false,
+  pedalZoneHeight: 0.2,    // footswitch zone: fraction of the stage height along the bottom
+  pedalTapTime: 400,       // ms: pinch on → off within this is a tap (toggle / select)
+  pedalTapMove: 0.5,       // palm sizes the pinch point may wander during a tap
+  pedalDragDeadband: 0.12, // palm sizes of vertical travel before a knob starts turning (~5% of its range)
+  pedalKnobTravel: 2.5,    // palm sizes of vertical travel for a knob's full range
+  pedalLatch: 100,         // ms: on release a knob keeps its value from this long before (camera)
+  pedalLockout: 400,       // ms after a tap during which further taps are ignored
+  pedalSettle: 150,        // ms a camera hand must be tracked before its pinch can press anything
+  wahStripWidth: 0.12,     // wah strip at the right edge: fraction of the stage width
 };
 
 export const SNAP_MODES = ['chord', 'scale', 'free'];
