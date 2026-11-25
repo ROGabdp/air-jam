@@ -32,7 +32,7 @@
 | 挑戰／提案文件 | `docs/*_設計挑戰.md`（開頭要有狀態） |
 | 給玩家看的 | `README.md` |
 
-- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`、`node tests/electric-rig.test.mjs`、`node tests/menu.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`
+- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`、`node tests/electric-rig.test.mjs`、`node tests/menu.test.mjs`、`node tests/wah.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`（`--set wah` 量娃娃音）
 - 不可提交：`samples/`（只記檔名、大小、用途和分析出來的數字）、`docs/工作日誌.md`、`.claude/skills/`
 - 敏感字樣：在技能資料夾的 `敏感字樣.txt`（不提交）
 - 推送：公開 repo，每次都先問擁有者
@@ -64,7 +64,7 @@
 ## 怎麼執行
 
 - **最簡單（Windows）：**雙擊 `開始玩.bat`（需要 Python）。它呼叫 `tools/start.ps1`，在 127.0.0.1 開伺服器（預設 8020，被佔用就往上找），強制 `.js`／`.mjs` 用 `text/javascript`、`.wasm` 用 `application/wasm`，再打開預設瀏覽器；加 `-NoBrowser` 不開瀏覽器。這兩個檔案由使用者維護，不要改。
-- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。玩家用的設定都在畫面上：開始畫面的「操作方式」（鏡頭／滑鼠）和「音色實驗室」，準備／演奏時右上角「設定」面板（音色、音高、效果器、拍子、手的骨架、根音保護…），選了會記在 `localStorage`（`airJam.prefs.v1`）。開發用的網址參數（只在這一次有效、不會寫回去）：`?mouse=1`、`?tone=steel|nylon|electric|labA～labD`（電吉他＝實驗室的丁＋效果器；實驗室音色只能這樣開）、`?keyguard=off`、`?pedals=0|1`、`?lab=1`（可加 `&song=samples/sample%2021.mp3` 直接載入本機範例）。自動測試若要乾淨的狀態，先清掉 `localStorage` 的 `airJam.prefs.v1` 和 `airJam.pedalboard.v1`。效果器板預設顯示；過載和破音已接上聲音（設計說明 15.1.3）；還沒有聲音的效果器在 `src/core/pedals/availability.js` 標成不能用（設計說明 15.1.2）。
+- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。玩家用的設定都在畫面上：開始畫面的「操作方式」（鏡頭／滑鼠）和「音色實驗室」，準備／演奏時右上角「設定」面板（音色、音高、效果器、拍子、手的骨架、根音保護…），選了會記在 `localStorage`（`airJam.prefs.v1`）。開發用的網址參數（只在這一次有效、不會寫回去）：`?mouse=1`、`?tone=steel|nylon|electric|labA～labD`（電吉他＝實驗室的丁＋效果器；實驗室音色只能這樣開）、`?keyguard=off`、`?pedals=0|1`、`?lab=1`（可加 `&song=samples/sample%2021.mp3` 直接載入本機範例）。自動測試若要乾淨的狀態，先清掉 `localStorage` 的 `airJam.prefs.v1` 和 `airJam.pedalboard.v1`。效果器板預設顯示；娃娃音、過載和破音已接上聲音（設計說明 15.1.3、15.1.4）；還沒有聲音的效果器在 `src/core/pedals/availability.js` 標成不能用（設計說明 15.1.2）。娃娃音的直條在不刷弦的那隻手那邊（預設左邊；設定面板的「慣用手」選左手換到右邊，記在 `airJam.prefs.v1`）。
 - 鏡頭模式需要網路（從 jsDelivr 和 Google 下載 MediaPipe），而且必須是 localhost 或 https 才能開鏡頭。
 - 在 console 裡可以用 `airJam` 看目前的狀態（`state`、`song.analysis`、`instrument.strings`、`scorer.state`…）。
 
@@ -87,7 +87,7 @@ src/
   core/music/              theory.js（音名、和弦、顏色）、pitch-snap.js（和弦吸附）、power-chords.js（強力和弦、調內根音保護）
   core/game/               song-map.js（時間 → 和弦／拍點）、scoring.js（判定、連擊、計分）
   core/audio/              engine.js（播放、聲部、發聲上限、換和弦收音、壓縮器、輸出上限）、karplus.js、tones.js（音色＋效果鏈）、distortion.js（削波曲線、收音時間）、
-                           stages.js（效果鏈寫成資料：建 Web Audio 節點／Node 模擬／小訊號響應；兩份交叉淡化的可切換鏈）、voice-params.js（撥弦參數）、tone-lab.js（實驗室音色甲乙丙丁）、electric-rig.js（電吉他＝丁＋過載、破音：旋鈕對應、預設組的值、自動配平、發聲規則）
+                           stages.js（效果鏈寫成資料：建 Web Audio 節點／Node 模擬／小訊號響應；兩份交叉淡化的可切換鏈）、voice-params.js（撥弦參數）、tone-lab.js（實驗室音色甲乙丙丁）、electric-rig.js（電吉他＝丁＋娃娃音、過載、破音：旋鈕對應、預設組的值、自動配平、發聲規則）、wah.js（娃娃音：旋鈕對應、音量補償、手控／跟刷弦／跟拍子的位置控制）
   core/hands/              tracker.js（鏡頭、MediaPipe、鏡像座標）、gestures.js、mouse.js、draw.js
   core/fx/effects.js       粒子、浮動文字、拍點閃光
   core/pedals/             效果器板（預設顯示）：model.js（資料、預設組、存檔）、gestures.js（捏一下／拖旋鈕）、layout.js、draw.js、pedalboard.js（誰收到手）、audio-binding.js（聲音接口：交給引擎的 applyPedals）、availability.js（哪幾顆能用，其他變暗「即將推出」）
@@ -99,7 +99,8 @@ tests/
   realistic-song.mjs       比較像真實錄音的測試樂團（七和弦、轉位、人聲、搖擺、變速、鼓前奏）
   samples.test.mjs         本機才跑：真實歌曲的拍子是否落在脈動上（讀 samples/*.wav，沒有就跳過）
   pedalboard.test.mjs      效果器板：資料、捏一下／捏住／拖的分辨、旋鈕放開時的值、防連按、腳踏區裡不能拉弦或撥弦
-  menu.test.mjs            記住的設定和網址參數的合併、還沒有聲音的效果器不能開關、用手按按鈕（捏一下、防連按、手在按鈕上不會撥弦或拉弦）
+  menu.test.mjs            記住的設定和網址參數的合併（含慣用手）、還沒有聲音的效果器不能開關、用手按按鈕（捏一下、防連按、手在按鈕上不會撥弦或拉弦）
+  wah.test.mjs             娃娃音：頻率和 Q 的對應、平滑的上限、跟刷弦的包絡、跟拍子在改速度時對齊、音量補償、引擎接線
   instrument.test.mjs      撥弦合成、手勢、穿越判定、吸附、強力和弦、調內保護、破音曲線、換和弦收音、計分、空中弦邏輯（22 項）
   tone-lab.test.mjs        硬削波曲線、雙二階濾波器、效果鏈模擬、甲的鏈沒變、撥弦參數、實驗室音色、刷法、Node 模型
   electric-rig.test.mjs    電吉他效果器：旋鈕對應、預設組（搖滾＝丁）、自動配平、切換平滑、發聲規則、分段撥弦、引擎（假的 AudioContext）
@@ -116,6 +117,7 @@ node tests/tone-lab.test.mjs
 node tests/pedalboard.test.mjs
 node tests/electric-rig.test.mjs
 node tests/menu.test.mjs
+node tests/wah.test.mjs
 node tools/tone-lab/measure.mjs   # 四個預設組和破音範圍兩端的量測表（--set lab：甲乙丙丁；有 samples/s14.wav、s21.wav 就用，沒有用示範曲）
 node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 samples/s14.wav、s21.wav，沒有就跳過）
 ```
@@ -123,7 +125,7 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 - `samples.test.mjs` 不解碼 MP3，要先用 ffmpeg 轉成 WAV（轉出來的檔案也在 `samples/` 裡，一樣不能提交）：
   `ffmpeg -i "samples/sample 14.mp3" -ac 2 -ar 44100 samples/s14.wav`（s21 同理）。它檢查一拍是整數個脈動（s21 約 571 ms，s14 375 或 750 ms）、≥ 90% 的拍點落在獨立擬合的脈動格線 ±40 ms 內，並印出 BPM、調性、小節長度和和弦段落。
 
-（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard、electric-rig、menu 六組，samples 要另外跑。）
+（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard、electric-rig、menu、wah 七組，samples 要另外跑。）
 
 - 歌曲分析（拍點、和弦、調性）要寫成純函式（輸入 `Float32Array` 和 sampleRate），用 `tests/` 裡的 Node 腳本測試。合成的 C–G–Am–F、100 BPM 示範曲應該要分析出正確的結果。改了分析程式就要重跑，並回報數字。
 - 瀏覽器測試用滑鼠模式加內建示範曲：console 沒有錯誤、分析能完成、能拉弦和撥弦、和弦顯示會更新、計分和結束畫面正常。用畫面上的按鈕切換（開始畫面選「滑鼠」、設定面板），不靠網址參數。
@@ -164,7 +166,7 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 - **還沒驗證：**用鏡頭操作效果器板（腳踏區在畫面最下方，追蹤最不穩）和畫面按鈕；Safari 和 Firefox。（2026-11-25 擁有者用鏡頭實測捏、撥、刷、握拳刪除，10 次都成功、畫面順暢；用滑鼠玩過兩首範例 MP3 和效果器，覺得效果不錯。）
 - 歌曲上限 15 分鐘（`maxSongMinutes`）。分析在主執行緒分段執行，5 分鐘的歌約 2 秒。
 - 只有滑鼠和鏡頭輸入，沒有觸控；手機還不支援。
-- **效果器：**只有過載和破音有聲音（娃娃音、合聲、延遲、空間之後再做）；進階模式的效果鏈順序還沒影響聲音；增益很大時新的一刷要 50～60 ms 才收乾淨（設計說明 15.1.3）。電吉他的新聲音（丁、四個預設組、粗糙削波）還沒有人實際聽過。
+- **效果器：**娃娃音、過載和破音有聲音（合聲、延遲、空間之後再做）；進階模式的效果鏈順序還沒影響聲音；增益很大時新的一刷要 50～60 ms 才收乾淨（設計說明 15.1.3）。電吉他的新聲音（丁、四個預設組、粗糙削波、娃娃音）還沒有人實際聽過。娃娃音的音量補償在預設範圍內 ±1.1 dB，「範圍」轉到兩端時最多差 2.7 dB；跟拍子的掃動在畫面每格更新一次，分頁在背景時會停住；用鏡頭在直條上控制還沒試過（設計說明 15.1.4）。
 
 ## 目前狀態
 
