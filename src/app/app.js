@@ -3,7 +3,8 @@
 import { SETTINGS, SNAP_MODES } from '../settings.js';
 import { t, applyTranslations } from '../i18n/index.js';
 import { createAudioEngine, mixToMono } from '../core/audio/engine.js';
-import { TONES, TONE_ORDER } from '../core/audio/tones.js';
+import { TONES as GAME_TONES, TONE_ORDER } from '../core/audio/tones.js';
+import { LAB_COMBOS } from '../core/audio/tone-lab.js';
 import { analyzeAsync, retime } from '../core/analysis/analysis.js';
 import { renderDemoSong, compareWithTruth } from '../core/song/demo-song.js';
 import { createSongMap } from '../core/game/song-map.js';
@@ -20,6 +21,8 @@ import { INSTRUMENTS, DEFAULT_INSTRUMENT } from '../instruments/instrument.js';
 import { createHud, keyName } from './hud.js';
 
 const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
+// The tone lab's combos can be played in the game with ?tone=labA..labD (testing only; T skips them).
+const TONES = { ...GAME_TONES, ...LAB_COMBOS };
 
 export function createApp() {
   const settings = SETTINGS;
