@@ -4,3 +4,7 @@ Thumbs.db
 
 # 範例音樂：有版權，只放在本機測試用，不提交
 samples/
+
+# 收尾技能（只在擁有者的電腦上用）與不公開的工作日誌
+.claude/skills/
+docs/工作日誌.md
