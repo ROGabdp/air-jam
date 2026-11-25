@@ -42,7 +42,12 @@ export function createHud() {
 
     setModeHint(mouse) { setText(el.modeHint, t(mouse ? 'intro.modeMouse' : 'intro.modeCamera')); },
     setIntroMessage(text) { setText(el.introMessage, text); },
-    setHelp(mouse) { el.help.innerHTML = [t(mouse ? 'help.mouse' : 'help.camera'), t('help.keys'), t('help.tempoKeys'), ...helpExtra].join('<br>'); },
+    // Two lines: the gestures, then where the controls are (every key is shown on its button).
+    setHelp(mouse) {
+      const where = [...helpExtra, t('help.menu')];
+      if (!mouse) where.push(t('help.handButtons'));
+      el.help.innerHTML = [t(mouse ? 'help.mouse' : 'help.camera'), where.join('　　')].join('<br>');
+    },
     // Extra help lines from optional features (e.g. the pedalboard); applied on the next setHelp.
     setHelpExtra(lines) { helpExtra = lines; },
     setMetronome(on) { el.metronome.classList.toggle('on', on); el.metronome.setAttribute('aria-pressed', String(on)); },

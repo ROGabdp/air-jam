@@ -1,0 +1,50 @@
+// On-page controls: the intro's mode switch and lab entry, the settings panel (gear), and the
+// "coming soon" pedals (merged into zh-Hant by i18n/index.js).
+export default {
+  'intro.modeLabel': '操作方式',
+  'intro.lab': '音色實驗室',
+
+  'menu.gear': '設定',
+  'menu.open': '設定',
+  'menu.title': '設定',
+  'menu.saved': '選好的設定會記在這台電腦上',
+  'menu.tone': '音色',
+  'menu.tone.steel': '木吉他',
+  'menu.tone.nylon': '古典吉他',
+  'menu.tone.electric': '電吉他',
+  'menu.toneOther': '目前：{name}',
+  'menu.snap': '音高',
+  'menu.snap.chord': '和弦',
+  'menu.snap.scale': '音階',
+  'menu.snap.free': '自由',
+  'menu.pedals': '效果器',
+  'menu.pedalsShow': '顯示腳踏區',
+  'menu.tuning': '調音色',
+  'menu.tuningOnlyReady': '調音色要在開始演奏前（演奏中可以用腳踏區開關）',
+  'menu.tempo': '拍子',
+  'menu.tempoNone': '這首歌沒有拍子資料',
+  'menu.tempoHint': '先開節拍器，聽滴答聲有沒有跟上歌',
+  'menu.input': '操作方式',
+  'menu.input.camera': '鏡頭',
+  'menu.input.mouse': '滑鼠',
+  'menu.showHand': '手的骨架',
+  'menu.advanced': '進階',
+  'menu.keyGuard': '根音保護（電吉他）',
+  'menu.keyGuardHint': '電吉他只用這首歌調性裡搖滾常用的根音',
+  'menu.done': '完成',
+  'menu.changeSong': '換一首歌',
+  'menu.lab': '音色實驗室',
+  'menu.on': '開',
+  'menu.off': '關',
+
+  'ready.settingsHint': '拍子不對、想換音色？按「設定」或右上角的齒輪',
+
+  'help.menu': '右上角「設定」換音色、音高、拍子',
+  'help.pedalsShort': '腳踏區點一下／捏一下＝開關效果器',
+  'help.handButtons': '捏一下按鈕＝按下',
+
+  'pedal.soon': '即將推出',
+  'pedal.comingSoon': '{name}：即將推出（還沒有聲音）',
+
+  'lab.back': '← 回到遊戲',
+};

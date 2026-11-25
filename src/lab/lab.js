@@ -64,6 +64,7 @@ export function createLab() {
   root.id = 'lab';
   root.className = 'lab';
   root.innerHTML = `
+    <button data-act="back" class="mini secondary lab-back">${t('lab.back')}</button>
     <h1>${t('lab.title')}<small>${t('lab.subtitle')}</small></h1>
     <div class="lab-row">
       <button data-act="demo" class="secondary">${t('lab.demo')}</button>
@@ -381,6 +382,7 @@ export function createLab() {
 
   // ---------- controls ----------
   const actions = {
+    back: () => { stop(); location.href = location.pathname; },
     demo: () => loadSong({ type: 'demo' }),
     pick: () => { audio.resume(); fileInput.click(); },
     prev: () => { if (state.song) { state.bar = Math.max(0, state.bar - 1); prepare(); } },

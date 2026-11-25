@@ -30,7 +30,7 @@
 | 挑戰／提案文件 | `docs/*_設計挑戰.md`（開頭要有狀態） |
 | 給玩家看的 | `README.md` |
 
-- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`
+- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`、`node tests/menu.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`
 - 不可提交：`samples/`（只記檔名、大小、用途和分析出來的數字）、`docs/工作日誌.md`、`.claude/skills/`
 - 敏感字樣：在技能資料夾的 `敏感字樣.txt`（不提交）
 - 推送：公開 repo，每次都先問擁有者
@@ -48,7 +48,8 @@
 - 畫面左右翻轉成鏡像，**手的座標要用同一套翻轉**。
 - 介面文字先用繁體中文，集中管理，之後方便加英文。
 - 主要支援 Chrome／Edge 桌機，但不要寫死只能在 Chrome 跑的寫法。
-- 一定要有**滑鼠模式**（`M` 鍵或 `?mouse=1`），沒有鏡頭也能玩，也拿來做自動測試。
+- 一定要有**滑鼠模式**（開始畫面的「操作方式」、`M` 鍵或 `?mouse=1`），沒有鏡頭也能玩，也拿來做自動測試。
+- **玩家要用的功能都要有畫面上的按鈕**（擁有者 2026-11-25：不要用網址切換）。按鍵只當快捷鍵、寫在按鈕上；網址參數只給開發者，玩家不需要。按鈕改的設定要記在 `localStorage`（`src/app/prefs.js`）。
 
 ## 命名與標註
 
@@ -61,7 +62,7 @@
 ## 怎麼執行
 
 - **最簡單（Windows）：**雙擊 `開始玩.bat`（需要 Python）。它呼叫 `tools/start.ps1`，在 127.0.0.1 開伺服器（預設 8020，被佔用就往上找），強制 `.js`／`.mjs` 用 `text/javascript`、`.wasm` 用 `application/wasm`，再打開預設瀏覽器；加 `-NoBrowser` 不開瀏覽器。這兩個檔案由使用者維護，不要改。
-- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。沒有鏡頭時加 `?mouse=1`，`?tone=nylon`／`?tone=electric` 可以指定音色，`?keyguard=off` 關掉強力和弦的調內根音保護。`?lab=1` 打開音色實驗室（甲乙丙丁循環試聽，可加 `&song=samples/sample%2021.mp3` 直接載入本機範例），`?tone=labA`～`labD` 在遊戲裡用實驗室的音色。`?pedals=1` 打開效果器板的介面（聲音還沒接上，設計說明 15.1.2）。
+- 開發和自動測試：在專案根目錄執行 `python -m http.server 8010`（ES module 不能直接雙擊 `index.html`），再打開 http://localhost:8010 。玩家用的設定都在畫面上：開始畫面的「操作方式」（鏡頭／滑鼠）和「音色實驗室」，準備／演奏時右上角「設定」面板（音色、音高、效果器、拍子、手的骨架、根音保護…），選了會記在 `localStorage`（`airJam.prefs.v1`）。開發用的網址參數（只在這一次有效、不會寫回去）：`?mouse=1`、`?tone=steel|nylon|electric|labA～labD`（實驗室音色只能這樣開）、`?keyguard=off`、`?pedals=0|1`、`?lab=1`（可加 `&song=samples/sample%2021.mp3` 直接載入本機範例）。自動測試若要乾淨的狀態，先清掉 `localStorage` 的 `airJam.prefs.v1` 和 `airJam.pedalboard.v1`。效果器板預設顯示；還沒有聲音的效果器在 `src/core/pedals/availability.js` 標成不能用（設計說明 15.1.2）。
 - 鏡頭模式需要網路（從 jsDelivr 和 Google 下載 MediaPipe），而且必須是 localhost 或 https 才能開鏡頭。
 - 在 console 裡可以用 `airJam` 看目前的狀態（`state`、`song.analysis`、`instrument.strings`、`scorer.state`…）。
 
@@ -76,6 +77,9 @@ src/
   i18n/                    介面文字（zh-Hant），t() 與 data-i18n
   app/app.js               遊戲外殼：畫面流程、載入與分析、主迴圈、按鍵、共用服務接線
   app/hud.js               DOM：畫面切換、HUD、結束畫面
+  app/menu.js              畫面上的按鈕：開始畫面的操作方式／實驗室、設定面板（齒輪），顯示目前狀態、接到 app 的動作
+  app/prefs.js             記住玩家用按鈕選的設定（localStorage），和開發用網址參數合併（純函式）
+  app/hand-buttons.js      鏡頭模式用「捏一下」按畫面按鈕；手在按鈕上時不給效果器板和樂器（純函式）
   core/analysis/           dsp.js（FFT、降取樣、STFT）、analysis.js（拍點、和弦、調性；純函式）
   core/song/               demo-song.js（示範曲與答案比對）、backing-synth.js（純 JS 伴奏合成）
   core/music/              theory.js（音名、和弦、顏色）、pitch-snap.js（和弦吸附）、power-chords.js（強力和弦、調內根音保護）
@@ -84,15 +88,16 @@ src/
                            stages.js（效果鏈寫成資料：建 Web Audio 節點／Node 模擬／小訊號響應）、voice-params.js（撥弦參數）、tone-lab.js（實驗室音色甲乙丙丁）
   core/hands/              tracker.js（鏡頭、MediaPipe、鏡像座標）、gestures.js、mouse.js、draw.js
   core/fx/effects.js       粒子、浮動文字、拍點閃光
-  core/pedals/             效果器板（?pedals=1）：model.js（資料、預設組、存檔）、gestures.js（捏一下／拖旋鈕）、layout.js、draw.js、pedalboard.js（誰收到手）、audio-binding.js（聲音接口，還沒接）
+  core/pedals/             效果器板（預設顯示）：model.js（資料、預設組、存檔）、gestures.js（捏一下／拖旋鈕）、layout.js、draw.js、pedalboard.js（誰收到手）、audio-binding.js（聲音接口）、availability.js（哪幾顆能用，其他變暗「即將推出」）
   instruments/             instrument.js（介面與登錄表）、air-strings/（空中弦、穿越判定）
-  lab/                     音色實驗室（?lab=1）：lab.js（畫面與排程）、performances.js（固定刷法）、metrics.js（量測定義）、offline-render.js（OfflineAudioContext）
+  lab/                     音色實驗室（開始畫面或設定面板的按鈕，或 ?lab=1）：lab.js（畫面與排程）、performances.js（固定刷法）、metrics.js（量測定義）、offline-render.js（OfflineAudioContext）
 tools/tone-lab/            model.mjs（引擎的 Node 模型）、measure.mjs（印出甲乙丙丁的量測表）
 tests/
   analysis.test.mjs        合成歌曲 → 分析 → 和答案比對（BPM、每拍和弦、拍點誤差、第一拍）
   realistic-song.mjs       比較像真實錄音的測試樂團（七和弦、轉位、人聲、搖擺、變速、鼓前奏）
   samples.test.mjs         本機才跑：真實歌曲的拍子是否落在脈動上（讀 samples/*.wav，沒有就跳過）
   pedalboard.test.mjs      效果器板：資料、捏一下／捏住／拖的分辨、旋鈕放開時的值、防連按、腳踏區裡不能拉弦或撥弦
+  menu.test.mjs            記住的設定和網址參數的合併、還沒有聲音的效果器不能開關、用手按按鈕（捏一下、防連按、手在按鈕上不會撥弦或拉弦）
   instrument.test.mjs      撥弦合成、手勢、穿越判定、吸附、強力和弦、調內保護、破音曲線、換和弦收音、計分、空中弦邏輯（22 項）
   tone-lab.test.mjs        硬削波曲線、雙二階濾波器、效果鏈模擬、遊戲電吉他鏈沒變、撥弦參數、實驗室音色、刷法、Node 模型
 docs/                      交接、決定紀錄、設計說明、背景研究、設計挑戰（工作日誌只在本機）
@@ -105,6 +110,7 @@ node tests/analysis.test.mjs      # 約 7 秒；加 --verbose 印出每小節的
 node tests/instrument.test.mjs
 node tests/tone-lab.test.mjs
 node tests/pedalboard.test.mjs
+node tests/menu.test.mjs
 node tools/tone-lab/measure.mjs   # 甲乙丙丁的量測表（有 samples/s14.wav、s21.wav 就用，沒有用示範曲）
 node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 samples/s14.wav、s21.wav，沒有就跳過）
 ```
@@ -112,10 +118,10 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 - `samples.test.mjs` 不解碼 MP3，要先用 ffmpeg 轉成 WAV（轉出來的檔案也在 `samples/` 裡，一樣不能提交）：
   `ffmpeg -i "samples/sample 14.mp3" -ac 2 -ar 44100 samples/s14.wav`（s21 同理）。它檢查一拍是整數個脈動（s21 約 571 ms，s14 375 或 750 ms）、≥ 90% 的拍點落在獨立擬合的脈動格線 ±40 ms 內，並印出 BPM、調性、小節長度和和弦段落。
 
-（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard 四組，samples 要另外跑。）
+（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard、menu 五組，samples 要另外跑。）
 
 - 歌曲分析（拍點、和弦、調性）要寫成純函式（輸入 `Float32Array` 和 sampleRate），用 `tests/` 裡的 Node 腳本測試。合成的 C–G–Am–F、100 BPM 示範曲應該要分析出正確的結果。改了分析程式就要重跑，並回報數字。
-- 瀏覽器測試用滑鼠模式加內建示範曲：console 沒有錯誤、分析能完成、能拉弦和撥弦、和弦顯示會更新、計分和結束畫面正常。
+- 瀏覽器測試用滑鼠模式加內建示範曲：console 沒有錯誤、分析能完成、能拉弦和撥弦、和弦顯示會更新、計分和結束畫面正常。用畫面上的按鈕切換（開始畫面選「滑鼠」、設定面板），不靠網址參數。
 - **鏡頭手勢無法自動測試**，要請使用者本人實際試，回報時要說清楚哪些項目沒有驗證。
 - **真實歌曲範例：**`samples/` 放擁有者提供的範例音樂（目前是兩首搖滾演奏曲：`sample 14.mp3` A 小調、`sample 21.mp3` A 藍調搖滾；速度見下方「已知限制」和 [背景研究](docs/背景研究與討論.md) 第 7 節）。它們有版權，已經用 `.gitignore` 排除，**不可以提交或推送**，也不要複製到其他會被提交的位置。改分析程式或設計獨奏、和弦玩法時，要用這些真實歌曲驗證，不能只靠合成的測試歌。
 
@@ -140,7 +146,7 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 ## 已知限制
 
 - **和弦分析：**簡單的三和弦伴奏幾乎全對；七和弦＋轉位約 44%，人聲很大聲時只有 16%（數字和原因見設計說明第 6.3 節）。只有 24 個大小三和弦、整首一個調性。
-- **速度：**先找脈動、再決定一拍是 1／2／4（或 3）個脈動，所以拍點一定落在脈動上（設計說明 6.2）。兩首範例：s21 104.9 BPM（舊版 140，錯）、s14 160 BPM（舊版 107；160 或 80 還要擁有者用耳朵確認）。慢的歌（約 70～80 BPM，有鼓的搖滾也會，例如合成測試的 80 BPM 搖滾被判成 160）常常猜成兩倍速度；拍點對得上，但每小節的第一拍會錯。假設 4/4 拍（三拍子分組當 12/8）。玩家可以手動修正（`[` `]` `;` `'` `,` `.` `0`，`K` 節拍器）。
+- **速度：**先找脈動、再決定一拍是 1／2／4（或 3）個脈動，所以拍點一定落在脈動上（設計說明 6.2）。兩首範例：s21 104.9 BPM（舊版 140，錯）、s14 160 BPM（舊版 107；160 或 80 還要擁有者用耳朵確認）。慢的歌（約 70～80 BPM，有鼓的搖滾也會，例如合成測試的 80 BPM 搖滾被判成 160）常常猜成兩倍速度；拍點對得上，但每小節的第一拍會錯。假設 4/4 拍（三拍子分組當 12/8）。玩家可以手動修正（設定面板的「拍子」按鈕，或 `[` `]` `;` `'` `,` `.` `0`，`K` 節拍器）。
 - **和弦（s21）：**拍子修好後，s21 的和弦段落邊界全部落在小節線或半小節上，而且每 12 小節重複同樣的位置；但標籤仍然亂（A、F#m、Am、G、Em、D 混著），因為整首貝斯都在 A、節奏吉他是 A5–A6–A7 的 boogie 音型，加上鼓的雜訊。這是和弦辨識的問題，不是格線的問題。電吉他音色的調內根音保護也改不了它：這些根音都在 A 大調允許的級數裡（設計說明 15.1.1）。
 - **還沒驗證：**鏡頭手勢（捏、撥、握拳）的實際手感、Safari 和 Firefox。這些都要使用者本人測。（2026-11-25 擁有者用滑鼠、和弦模式玩過兩首範例 MP3，覺得效果不錯；鏡頭還沒有正式測過。）
 - 歌曲上限 15 分鐘（`maxSongMinutes`）。分析在主執行緒分段執行，5 分鐘的歌約 2 秒。

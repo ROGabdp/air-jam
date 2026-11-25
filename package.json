@@ -1,1 +1,1 @@
-{"type":"module","private":true,"name":"air-jam","license":"MIT","scripts":{"test":"node tests/analysis.test.mjs && node tests/instrument.test.mjs && node tests/tone-lab.test.mjs && node tests/pedalboard.test.mjs"}}
+{"type":"module","private":true,"name":"air-jam","license":"MIT","scripts":{"test":"node tests/analysis.test.mjs && node tests/instrument.test.mjs && node tests/tone-lab.test.mjs && node tests/pedalboard.test.mjs && node tests/menu.test.mjs"}}

@@ -301,7 +301,8 @@ const camHand = (id, p, extra = {}) => ({ ...mouseHover(p), id, source: 'camera'
 function rig({ withPedals = true } = {}) {
   const settings = { ...SETTINGS };
   const storage = memoryStorage();
-  const board = withPedals ? createPedalboard({ settings, t: k => k, stage: STAGE, storage }) : null;
+  // Every pedal available: these tests are about the mechanics (availability: tests/menu.test.mjs).
+  const board = withPedals ? createPedalboard({ settings, t: k => k, stage: STAGE, storage, isAvailable: () => true }) : null;
   const instrument = createAirStrings();
   const played = [];
   const noop = () => {};

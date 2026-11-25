@@ -20,17 +20,30 @@ import { loadHandLandmarker, startCamera, stopCamera, createHandTracker, createC
 import { INSTRUMENTS, DEFAULT_INSTRUMENT } from '../instruments/instrument.js';
 import { createHud, keyName } from './hud.js';
 import { attachPedalboard } from '../core/pedals/index.js';
+import { createPrefs, prefSpec } from './prefs.js';
+import { createMenu } from './menu.js';
 
 const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => resolve()));
 // The tone lab's combos can be played in the game with ?tone=labA..labD (testing only; T skips them).
 const TONES = { ...GAME_TONES, ...LAB_COMBOS };
+const safeStorage = () => { try { return window.localStorage; } catch { return null; } };
 
 export function createApp() {
   const settings = SETTINGS;
-  const query = new URLSearchParams(location.search);
-  if (TONES[query.get('tone')]) settings.tone = query.get('tone');
-  if (query.get('keyguard') === 'off') settings.keyGuard = false;
-  if (query.get('pedals') === '1') settings.pedals = true;
+  // Choices made with the on-page buttons are remembered; developer URL flags (?mouse=1, ?tone=,
+  // ?keyguard=off, ?pedals=0|1) override them for this visit only (prefs.js).
+  const prefs = createPrefs({
+    storage: safeStorage(),
+    query: new URLSearchParams(location.search),
+    allTones: Object.keys(TONES),
+    spec: prefSpec({ tones: TONE_ORDER, snapModes: SNAP_MODES }),
+    defaults: {
+      tone: settings.tone, snapMode: settings.snapMode, metronome: settings.metronome, showHand: settings.showHand,
+      keyGuard: settings.keyGuard, pedals: settings.pedals, mouse: false,
+    },
+  });
+  const { mouse: startInMouseMode, ...remembered } = prefs.values;
+  Object.assign(settings, remembered);
 
   applyTranslations();
   const hud = createHud();
@@ -52,7 +65,8 @@ export function createApp() {
   let chord = null;
   let lastBeat = -1;
   let clickedBeat = -1;
-  let mouseMode = query.get('mouse') === '1';
+  let mouseMode = startInMouseMode;
+  let menu = null;               // on-page controls, created once the game's state exists
   let camera = { status: 'off', tracker: null, token: 0 };   // off | starting | ready | failed
   let cameraHands = [];
   let cameraHandsAt = 0;
@@ -88,10 +102,10 @@ export function createApp() {
   const mouse = createMouseInput(stageElement, {
     onCommand: command => { if ((state === 'ready' || state === 'playing') && !pedals?.blocks(command)) instrument.onCommand?.(command); },
   });
-  // Pedalboard UI behind ?pedals=1: it sees the hands first and withholds the ones it is using.
-  const pedals = settings.pedals
-    ? attachPedalboard({ settings, t, stage, element: stageElement, hud, getAudio: () => audio, mouseMode: () => mouseMode })
-    : null;
+  // Pedalboard: shown unless the player hid it (settings.pedals). It sees the hands before the
+  // instrument and withholds the ones it is using; hidden, it is routed as if off stage.
+  const pedals = attachPedalboard({ settings, t, stage, element: stageElement, hud, getAudio: () => audio, mouseMode: () => mouseMode });
+  const pedalScreen = () => (settings.pedals ? state : 'hidden');
 
   // ---------- layout ----------
   function resize() {
@@ -113,6 +127,7 @@ export function createApp() {
     hud.setModeHint(mouseMode);
     hud.setHelp(mouseMode);
     refreshInfo();
+    menu?.refresh();
   }
 
   function fallBackToMouse(messageKey) {
@@ -199,6 +214,7 @@ export function createApp() {
     }
     parts.push(snapLabel(), t(`hud.tone.${settings.tone}`));
     hud.setSongInfo(parts.join('　·　'));
+    menu?.refresh();
   }
 
   function statusText() {
@@ -249,6 +265,7 @@ export function createApp() {
   function setState(next) {
     state = next;
     hud.showScreen(state);
+    menu?.setScreen(state);
   }
 
   // ---------- song flow ----------
@@ -382,6 +399,7 @@ export function createApp() {
 
   function toggleMetronome() {
     settings.metronome = !settings.metronome;
+    prefs.remember('metronome', settings.metronome);
     clickedBeat = song?.map && audio ? song.map.beatIndexAt(audio.songTime()) : -1;
     hud.setMetronome(settings.metronome);
     hud.toast(t(settings.metronome ? 'tempo.clickOn' : 'tempo.clickOff'), 1.5);
@@ -416,8 +434,10 @@ export function createApp() {
     const onStage = state === 'ready' || state === 'playing';
 
     hands = onStage ? readHands(time) : [];
-    if (onStage) instrument.onHands(pedals ? pedals.route(hands, time, state) : hands, time);
-    else pedals?.route([], time, state);
+    // Page buttons first (a camera hand over one is theirs), then the pedalboard, then the strings.
+    const free = menu.routeHands(hands, time, { camera: onStage && !mouseMode });
+    if (onStage) instrument.onHands(pedals.route(free, time, pedalScreen()), time);
+    else pedals.route([], time, pedalScreen());
 
     if (state === 'playing' && song.map) {
       const heard = Math.max(0, heardTime());
@@ -486,25 +506,108 @@ export function createApp() {
   }
   const TEMPO_KEYS = { '[': 'half', ']': 'double', ';': 'slower', "'": 'faster', ',': 'earlier', '.': 'later', '0': 'reset' };
 
+  // ---------- player choices (buttons and keys share these; each one is remembered) ----------
+  function chooseMouseMode(on) {
+    setMouseMode(on);
+    prefs.remember('mouse', on);
+  }
+
+  function chooseTone(id) {
+    if (!TONES[id]) return;
+    setTone(id);
+    prefs.remember('tone', id);
+    hud.toast(t(`hud.tone.${settings.tone}`), 1.5);
+  }
+
+  function chooseSnapMode(mode) {
+    if (!SNAP_MODES.includes(mode)) return;
+    settings.snapMode = mode;
+    prefs.remember('snapMode', mode);
+    refreshInfo();
+    hud.toast(snapLabel(), 1.5);
+  }
+
+  function toggleHand() {
+    settings.showHand = !settings.showHand;
+    prefs.remember('showHand', settings.showHand);
+  }
+
+  function setKeyGuard(on) {
+    settings.keyGuard = !!on;
+    refreshMap();
+    refreshInfo();
+  }
+
+  function setPedalsShown(on) {
+    settings.pedals = !!on;
+    prefs.remember('pedals', settings.pedals);
+    pedals.setShown(settings.pedals);
+    hud.setHelp(mouseMode);
+  }
+
+  function openTuning() {
+    if (!settings.pedals) return;
+    if (state === 'ready') pedals.openTuning();
+    else hud.toast(t('menu.tuningOnlyReady'), 2.5);
+  }
+
+  menu = createMenu({
+    t, settings,
+    getState: () => ({
+      screen: state,
+      tone: settings.tone,
+      tones: TONE_ORDER,
+      toneName: t(`hud.tone.${settings.tone}`),
+      snapMode: settings.snapMode,
+      metronome: settings.metronome,
+      showHand: settings.showHand,
+      keyGuard: settings.keyGuard,
+      pedalsShown: settings.pedals,
+      mouseMode,
+      tempo: {
+        available: !!song?.analysis,
+        bpm: song?.analysis?.bpm ?? 0,
+        manual: !!song?.analysis && (song.analysis.manual.factor !== 1 || song.analysis.manual.shift !== 0),
+      },
+    }),
+    actions: {
+      setTone: chooseTone,
+      setSnapMode: chooseSnapMode,
+      setMouseMode: chooseMouseMode,
+      toggleHand,
+      setPedalsShown,
+      openTuning,
+      setKeyGuard(on) {
+        setKeyGuard(on);
+        prefs.remember('keyGuard', settings.keyGuard);
+        hud.toast(`${t('menu.keyGuard')}：${t(settings.keyGuard ? 'menu.on' : 'menu.off')}`, 1.5);
+      },
+      changeSong: backToIntro,
+      openLab: () => { location.href = `${location.pathname}?lab=1`; },
+    },
+  });
+
   window.addEventListener('keydown', event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key.toLowerCase();
-    if (pedals?.handleKey(key, state)) { event.preventDefault(); return; }
-    if (key === 'm') setMouseMode(!mouseMode);
-    else if (key === 'h') settings.showHand = !settings.showHand;
+    if (pedals.handleKey(key, pedalScreen())) {
+      event.preventDefault();
+      if (pedals.tuningOpen) menu.close();
+      menu.refresh();
+      return;
+    }
+    if (key === 'escape' && menu.isOpen) { menu.close(); return; }
+    if (key === 'm') chooseMouseMode(!mouseMode);
+    else if (key === 'h') toggleHand();
     else if (key === 'k') toggleMetronome();
     else if (TEMPO_KEYS[key]) adjustTempo(TEMPO_ACTIONS[TEMPO_KEYS[key]]);
     else if (key === ' ' && state === 'ready') { event.preventDefault(); beginSong(); }
     else if (key === 'escape' && state === 'playing') finish();
     else if (key === 'escape' && state === 'ready') backToIntro();
-    else if (['1', '2', '3'].includes(key)) {
-      settings.snapMode = SNAP_MODES[Number(key) - 1];
-      refreshInfo();
-      hud.toast(snapLabel(), 1.5);
-    } else if (key === 't') {
-      setTone(TONE_ORDER[(TONE_ORDER.indexOf(settings.tone) + 1) % TONE_ORDER.length]);
-      hud.toast(t(`hud.tone.${settings.tone}`), 1.5);
-    }
+    else if (['1', '2', '3'].includes(key)) chooseSnapMode(SNAP_MODES[Number(key) - 1]);
+    else if (key === 't') chooseTone(TONE_ORDER[(TONE_ORDER.indexOf(settings.tone) + 1) % TONE_ORDER.length]);
+    else return;
+    menu.refresh();
   });
   window.addEventListener('resize', resize);
 
@@ -516,10 +619,10 @@ export function createApp() {
 
   // Handle for the console and automated checks.
   return {
-    settings, instrument, scorer, pitch, fx, pedals,
+    settings, instrument, scorer, pitch, fx, pedals, menu, prefs,
     setTone,
     // In-key root guard for power chords (open question for the owner): airJam.setKeyGuard(false)
-    setKeyGuard(on) { settings.keyGuard = !!on; refreshMap(); },
+    setKeyGuard(on) { setKeyGuard(on); menu.refresh(); },
     get state() { return state; },
     get song() { return song; },
     get audio() { return audio; },

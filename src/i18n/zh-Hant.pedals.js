@@ -62,6 +62,4 @@ export default {
   'preset.crunch': '微破',
   'preset.rock': '搖滾',
   'preset.metal': '重金屬',
-
-  'help.pedals': '效果器：下方腳踏區捏一下＝開關　4～9 開關　P 調效果器　W 娃娃音手控／自動',
 };
