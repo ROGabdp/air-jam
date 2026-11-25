@@ -39,6 +39,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
   let lastToggle = null;               // { target, time }
   const wheelGlide = createWheelGlide();
   let wheelHintAt = -Infinity;
+  let discFlash = null;                // { pedal, until }: the disc's value label after a wheel turn
 
   const wahStripShown = () => isAvailable('wah') && model.isOn('wah') && model.param('wah', 'mode') < 0.5;
   const soon = id => toast(t('pedal.comingSoon', { name: t(PEDAL_TYPES[id].label) }));
@@ -61,6 +62,11 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
       return { kind: 'locked', pedal: target.pedal, rect: target.rect, cx: target.cx, cy: target.cy, r: target.r };
     }
     if (target?.kind === 'knob') target.value = target.macro ? model.macro(target.macro) : model.param(target.pedal, target.knob);
+    // The big disc: a tap toggles, a drag turns the pedal's main amount (model.mainKnob).
+    if (target?.kind === 'switch') {
+      const knob = model.mainKnob(target.pedal);
+      if (knob) Object.assign(target, { knob, def: knobOf(target.pedal, knob), value: model.param(target.pedal, knob) });
+    }
     return target;
   }
 
@@ -91,6 +97,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     for (const event of events) {
       const { target } = event;
       if (event.type === 'press' && target.macro) macroBases.set(event.pointerId, model.macroBase(target.macro));
+      else if (event.type === 'press' && target.pedal === 'wah' && target.knob === 'position') settleWheel();
       else if (event.type === 'tap') tap(target, now);
       else if (event.type === 'knob' || event.type === 'knobEnd') {
         const commit = event.type === 'knobEnd';
@@ -175,6 +182,7 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
       lockout: lockout.remaining(time), lastToggle,
       mouse: mouseMode(),
       audition: auditionRunning,
+      discFlash: discFlash && time < discFlash.until ? discFlash.pedal : null,
       available: isAvailable,
     };
     if (tuningOpen) { drawTuning(g, view); return; }
@@ -257,13 +265,22 @@ export function createPedalboard({ settings, t, stage, storage = null, element =
     return true;
   }
 
-  // Mouse wheel: over a knob it turns the knob (both modes); elsewhere on the stage in mouse mode
+  // Mouse wheel: over a knob it turns the knob, over a big disc its main amount (both modes); elsewhere on the stage in mouse mode
   // it moves the wah pedal. The page never scrolls under the stage in mouse mode.
   function onWheel(event) {
     if (!visible) return;
     const rect = element?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const target = hitTest(targetsNow(), point);
+    // Over a big disc: its main amount, like the small knob it shares the value with.
+    if (target?.kind === 'switch' && target.knob) {
+      event.preventDefault?.();
+      discFlash = { pedal: target.pedal, until: time + 1.2 };
+      // The wah pedal glides the same as the wheel anywhere else; an off wah is still set directly.
+      if (target.pedal === 'wah' && target.knob === 'position' && model.isOn('wah')) { wheelWah(wheelNotches(event)); return; }
+      model.setParam(target.pedal, target.knob, target.value - event.deltaY * WHEEL_STEP);
+      return;
+    }
     if (target?.kind !== 'knob') {
       if (tuningOpen || !mouseMode()) return;
       event.preventDefault?.();

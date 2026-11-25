@@ -44,7 +44,7 @@ export default {
   'ready.settingsHint': '拍子不對、想換音色？按「設定」或右上角的齒輪',
 
   'help.menu': '右上角「設定」換音色、音高、拍子',
-  'help.pedalsShort': '腳踏區點一下／捏一下＝開關效果器',
+  'help.pedalsShort': '腳踏區：點／捏一下＝開關，上下拖＝調整',
   'help.handButtons': '捏一下按鈕＝按下',
 
   'pedal.soon': '即將推出',

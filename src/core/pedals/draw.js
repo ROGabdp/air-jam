@@ -8,6 +8,7 @@ const FONT = '"Segoe UI", "Microsoft JhengHei", sans-serif';
 const TAU = Math.PI * 2;
 const KNOB_FROM = Math.PI * 0.75, KNOB_SWEEP = Math.PI * 1.5;
 const AMP_HUE = 30;
+const RING_GAP = 5;   // a disc's amount ring sits this far outside it; press feedback goes outside the ring
 
 const hueOf = id => (id === AMP ? AMP_HUE : PEDAL_TYPES[id]?.hue ?? 200);
 const hsla = (h, s, l, a = 1) => `hsla(${h}, ${s}%, ${l}%, ${a})`;
@@ -110,9 +111,11 @@ function drawIcon(g, icon, cx, cy, s, color) {
 
 // ---------- building blocks ----------
 // soon: label for a pedal that cannot be used yet (drawn dimmed and off, with a badge).
-function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon }) {
+// amount: the pedal's main knob value (0..1), drawn as a ring like a knob's arc: bright when the
+// pedal is on, dimmed when off (dragging an off disc still sets it); `active` while being dragged.
+function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon, amount = null, active = false }) {
   g.save();
-  if (soon) { on = false; g.globalAlpha = 0.42; }
+  if (soon) { on = false; amount = null; g.globalAlpha = 0.42; }
   if (on) {
     g.globalCompositeOperation = 'lighter';
     const halo = g.createRadialGradient(cx, cy, r * 0.6, cx, cy, r * 1.55);
@@ -132,6 +135,19 @@ function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon }) 
   }
   g.fillStyle = body;
   g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.fill();
+  if (amount !== null) {
+    const ringR = r + RING_GAP;
+    g.lineCap = 'round';
+    g.lineWidth = active ? 4 : 3;
+    g.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+    g.beginPath(); g.arc(cx, cy, ringR, KNOB_FROM, KNOB_FROM + KNOB_SWEEP); g.stroke();
+    if (amount > 0.002) {
+      g.strokeStyle = on || active ? hsla(hue, 95, active ? 78 : 66, 0.95) : hsla(hue, 35, 60, 0.45);
+      if (on) { g.shadowColor = hsla(hue, 100, 65, 0.9); g.shadowBlur = active ? 12 : 7; }
+      g.beginPath(); g.arc(cx, cy, ringR, KNOB_FROM, KNOB_FROM + KNOB_SWEEP * amount); g.stroke();
+      g.shadowBlur = 0;
+    }
+  }
   g.lineWidth = hover ? 3 : 2;
   g.strokeStyle = on ? hsla(hue, 100, 88, 0.9) : hsla(hue, 70, 65, hover ? 0.95 : 0.6);
   g.stroke();
@@ -150,7 +166,7 @@ function drawDisc(g, { cx, cy, r, hue, on, icon, label, hover, keyHint, soon }) 
   }
   g.fillStyle = on ? hsla(hue, 100, 85) : 'rgba(80, 84, 110, 0.9)';
   g.beginPath(); g.arc(lx, ly, lr, 0, TAU); g.fill();
-  if (keyHint) text(g, keyHint, cx - r * 0.78, cy - r * 0.78, { size: 11, color: 'rgba(244,246,255,0.6)' });
+  if (keyHint) text(g, keyHint, cx - r * 0.6, cy - r * 0.6, { size: 11, color: 'rgba(244,246,255,0.6)' });
   g.restore();
   if (soon) {
     const size = Math.max(10, Math.min(13, r * 0.26));
@@ -255,9 +271,9 @@ function drawButton(g, target, label, { selected = false, hover = false, hue = 4
 // a shrinking arc while switches are locked after a toggle.
 function drawFeedback(g, view, target) {
   const press = view.presses.find(p => sameTarget(p.target, target));
-  const r = (target.r ?? Math.min(target.rect.w, target.rect.h) / 2) + 7;
+  const r = (target.r ?? Math.min(target.rect.w, target.rect.h) / 2) + 7 + (target.kind === 'switch' ? RING_GAP + 2 : 0);
   const cx = target.cx ?? target.rect.x + target.rect.w / 2, cy = target.cy ?? target.rect.y + target.rect.h / 2;
-  if (press && target.kind !== 'knob') {
+  if (press && target.kind !== 'knob' && !press.dragging) {
     const expired = view.time - press.since > view.settings.pedalTapTime / 1000;
     g.save();
     g.lineWidth = 3;
@@ -279,12 +295,36 @@ function drawFeedback(g, view, target) {
 
 export function sameTarget(a, b) {
   if (!a || !b || a.kind !== b.kind) return false;
+  // A pressed disc carries its main knob (hit test); the drawn one may not.
+  if (a.kind === 'switch') return a.pedal === b.pedal;
   return a.pedal === b.pedal && a.knob === b.knob && a.macro === b.macro && a.action === b.action
     && a.preset === b.preset && a.mode === b.mode && a.delta === b.delta;
 }
 
 const isHover = (view, target) => view.hovered.some(h => sameTarget(h, target));
 const isActive = (view, target) => view.presses.some(p => sameTarget(p.target, target));
+const isDragging = (view, target) => view.presses.some(p => p.dragging && sameTarget(p.target, target));
+
+// A footswitch disc with its amount ring, and while it is dragged (or just turned by the wheel)
+// the knob's name and value above it, plus a hint when the pedal is off (the sound waits for it).
+function drawFootswitch(g, view, target, extra = {}) {
+  const { model, t } = view;
+  const pedal = target.pedal;
+  const knob = model.mainKnob(pedal);
+  const def = knob ? knobOf(pedal, knob) : null;
+  const soon = soonOf(view, pedal);
+  const on = model.isOn(pedal);
+  const dragging = isDragging(view, target);
+  const amount = def ? model.param(pedal, knob) : null;
+  drawDisc(g, { cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(pedal), on, icon: PEDAL_TYPES[pedal].icon,
+    label: t(PEDAL_TYPES[pedal].label), hover: isHover(view, target), soon, amount, active: dragging, ...extra });
+  drawFeedback(g, view, target);
+  if (!def || soon || !(dragging || view.discFlash === pedal)) return;
+  const size = Math.max(11, Math.min(14, target.r * 0.34));
+  const y = target.cy - target.r - RING_GAP - size * (on ? 0.9 : 2);
+  text(g, `${t(def.label)} ${valueText(t, def, amount)}`, target.cx, y, { size, weight: 700, color: hsla(hueOf(pedal), 90, 84, 0.98) });
+  if (!on) text(g, t(view.mouse ? 'pedal.discOffMouse' : 'pedal.discOff'), target.cx, y + size * 1.2, { size: size - 1, color: 'rgba(244,246,255,0.7)' });
+}
 
 // ---------- footswitch zone ----------
 export function drawZone(g, view) {
@@ -303,12 +343,7 @@ export function drawZone(g, view) {
 
   for (const target of view.targets) {
     if (target.kind === 'switch') {
-      drawDisc(g, {
-        cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(target.pedal), on: model.isOn(target.pedal),
-        icon: PEDAL_TYPES[target.pedal].icon, label: t(PEDAL_TYPES[target.pedal].label),
-        hover: isHover(view, target), keyHint: String(target.index + 4), soon: soonOf(view, target.pedal),
-      });
-      drawFeedback(g, view, target);
+      drawFootswitch(g, view, target, { keyHint: String(target.index + 4) });
     } else if (target.kind === 'knob') {
       drawKnob(g, t, { ...target, hue: hueOf(target.pedal), label: target.def.label, def: target.def,
         active: isActive(view, target), hover: isHover(view, target), dim: !model.isOn(target.pedal) || !!soonOf(view, target.pedal) });
@@ -379,9 +414,7 @@ export function drawTuning(g, view) {
       drawButton(g, target, label, { selected, hover, dim, hue });
       drawFeedback(g, view, target);
     } else if (target.kind === 'switch') {
-      drawDisc(g, { cx: target.cx, cy: target.cy, r: target.r, hue: hueOf(target.pedal), on: model.isOn(target.pedal),
-        icon: PEDAL_TYPES[target.pedal].icon, label: t(PEDAL_TYPES[target.pedal].label), hover, soon: soonOf(view, target.pedal) });
-      drawFeedback(g, view, target);
+      drawFootswitch(g, view, target);
     } else if (target.kind === 'knob' && target.macro) {
       drawKnob(g, t, { ...target, hue: 20, label: MACROS[target.macro].label, def: null, active: isActive(view, target), hover });
     } else if (target.kind === 'knob') {

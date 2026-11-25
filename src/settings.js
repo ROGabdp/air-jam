@@ -48,6 +48,8 @@ export const SETTINGS = {
   pedalTapTime: 400,       // ms: pinch on → off within this is a tap (toggle / select)
   pedalTapMove: 0.5,       // palm sizes the pinch point may wander during a tap
   pedalDragDeadband: 0.12, // palm sizes of vertical travel before a knob starts turning (~5% of its range)
+  pedalDiscDeadband: 0.25, // palm sizes before dragging a footswitch (big disc) changes its amount: wider
+                           // than a knob's, so a pinch that drifts while closing still toggles
   pedalKnobTravel: 2.5,    // palm sizes of vertical travel for a knob's full range
   pedalLatch: 100,         // ms: on release a knob keeps its value from this long before (camera)
   pedalLockout: 400,       // ms after a tap during which further taps are ignored

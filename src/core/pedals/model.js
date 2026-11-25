@@ -28,6 +28,8 @@ const level = { id: 'level', label: 'pedal.knob.level', min: -12, max: 6, unit: 
  *         simple (shown in simple mode), advanced? (false: hidden in advanced mode, which has finer
  *         knobs for it), steps? (i18n keys; value snaps to step / (n − 1)),
  *         toggle? (drawn as a button that cycles its steps), hidden? (not drawn as a knob) }
+ * mainKnob: the knob the pedal's big disc (footswitch) turns when dragged (owner 2026-11-25), a
+ * knob id or a function of the pedal's params; the disc and the small knob share that one value.
  * Physical ranges are starting points from docs/效果器研究.md 4.3; the tone lab decides the rest.
  */
 export const PEDAL_TYPES = {
@@ -36,6 +38,8 @@ export const PEDAL_TYPES = {
   // advanced: heel and toe frequencies, resonance, auto source, sensitivity, attack, decay, level.
   wah: {
     label: 'pedal.wah', hue: 285, icon: 'wah',
+    // Hand mode: the pedal itself (what the strip and the wheel move); auto: how far strums open it.
+    mainKnob: params => (params.mode >= 0.5 ? 'sensitivity' : 'position'),
     knobs: [
       { id: 'position', label: 'pedal.knob.position', min: 0, max: 1, unit: '', default: 0.5, simple: false, hidden: true },
       { id: 'mode', label: 'pedal.knob.wahMode', min: 0, max: 1, unit: '', default: 1, simple: true, toggle: true, steps: ['pedal.step.hand', 'pedal.step.auto'] },
@@ -52,6 +56,7 @@ export const PEDAL_TYPES = {
   },
   overdrive: {
     label: 'pedal.overdrive', hue: 45, icon: 'overdrive',
+    mainKnob: 'drive',
     knobs: [
       { id: 'drive', label: 'pedal.knob.drive', min: 12, max: 36, unit: 'dB', default: 0.35, simple: true },
       { id: 'tone', label: 'pedal.knob.tone', min: -8, max: 6, unit: 'dB', default: 0.55, simple: true },
@@ -60,6 +65,7 @@ export const PEDAL_TYPES = {
   },
   distortion: {
     label: 'pedal.distortion', hue: 2, icon: 'distortion',
+    mainKnob: 'drive',
     knobs: [
       { id: 'drive', label: 'pedal.knob.drive', min: 10, max: 46, unit: 'dB', default: 0.5, simple: true },
       { id: 'tone', label: 'pedal.knob.tone', min: 0, max: 1, unit: '', default: 0.5, simple: true },
@@ -70,6 +76,7 @@ export const PEDAL_TYPES = {
   // 40 %); advanced adds 混合, 音色 (wet low-pass), 寬度 (stereo spread) and 音量.
   chorus: {
     label: 'pedal.chorus', hue: 165, icon: 'chorus',
+    mainKnob: 'depth',
     knobs: [
       { id: 'rate', label: 'pedal.knob.rate', min: CHORUS_RANGES.rateHz[0], max: CHORUS_RANGES.rateHz[1], unit: 'Hz', curve: 'log', default: CHORUS_DEFAULT_KNOBS.rate, simple: true },
       { id: 'depth', label: 'pedal.knob.depth', min: CHORUS_RANGES.depthMs[0], max: CHORUS_RANGES.depthMs[1], unit: 'ms', default: CHORUS_DEFAULT_KNOBS.depth, simple: true },
@@ -84,6 +91,7 @@ export const PEDAL_TYPES = {
   // synced time), 自由 time, 音色 (loop low-pass), 來回 (ping-pong), 換和弦收 and level.
   delay: {
     label: 'pedal.delay', hue: 212, icon: 'delay',
+    mainKnob: 'mix',
     knobs: [
       { id: 'mix', label: 'pedal.knob.echoLevel', min: DELAY_RANGES.mix[0], max: DELAY_RANGES.mix[1], unit: '%', default: DELAY_DEFAULT_KNOBS.mix, simple: true },
       { id: 'feedback', label: 'pedal.knob.feedback', min: DELAY_RANGES.feedback[0], max: DELAY_RANGES.feedback[1], unit: '%', default: DELAY_DEFAULT_KNOBS.feedback, simple: true },
@@ -100,6 +108,7 @@ export const PEDAL_TYPES = {
   // advanced adds 音色 (wet low-pass), 預延遲, 低頻切除 (wet high-pass) and 音量 (wet level).
   reverb: {
     label: 'pedal.reverb', hue: 250, icon: 'reverb',
+    mainKnob: 'mix',
     knobs: [
       { id: 'size', label: 'pedal.knob.size', min: 0, max: REVERB_SIZES.length - 1, unit: '', default: REVERB_DEFAULT_KNOBS.size, simple: true, steps: REVERB_SIZES.map(s => s.label) },
       { id: 'mix', label: 'pedal.knob.mix', min: REVERB_RANGES.mix[0], max: REVERB_RANGES.mix[1], unit: '%', default: REVERB_DEFAULT_KNOBS.mix, simple: true },
@@ -141,6 +150,12 @@ export const MACROS = {
   tone: { label: 'pedal.macro.tone', targets: [['overdrive', 'tone'], ['distortion', 'tone']] },
   sustain: { label: 'pedal.macro.sustain', targets: [[AMP, 'sustain']] },
 };
+
+// The knob a pedal's big disc turns (null: none), for the pedal's current params.
+export function mainKnobOf(pedalId, params = {}) {
+  const main = PEDAL_TYPES[pedalId]?.mainKnob;
+  return (typeof main === 'function' ? main(params) : main) ?? null;
+}
 
 const typeOf = id => (id === AMP ? AMP_TYPE : PEDAL_TYPES[id]);
 export const knobOf = (pedalId, knobId) => typeOf(pedalId)?.knobs.find(k => k.id === knobId) ?? null;
@@ -306,6 +321,7 @@ export function createPedalModel({ storage = null, key = STORAGE_KEY } = {}) {
     pedalOrder: () => boardSnapshot(board).order.filter(id => id !== AMP),
     isOn: id => board.pedals[id]?.on === true,
     param: (id, knob) => paramsOf(id)?.[knob],
+    mainKnob: id => mainKnobOf(id, board.pedals[id]?.params),
 
     toggle(id, on) {
       if (!board.pedals[id]) return false;

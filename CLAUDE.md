@@ -32,7 +32,7 @@
 | 挑戰／提案文件 | `docs/*_設計挑戰.md`（開頭要有狀態） |
 | 給玩家看的 | `README.md` |
 
-- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`、`node tests/electric-rig.test.mjs`、`node tests/menu.test.mjs`、`node tests/wah.test.mjs`、`node tests/post-fx.test.mjs`、`node tests/chorus.test.mjs`、`node tests/delay.test.mjs`、`node tests/reverb.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`（`--set wah` 量娃娃音，`--set sustain` 量延音）
+- 測試：`node tests/analysis.test.mjs`、`node tests/instrument.test.mjs`、`node tests/tone-lab.test.mjs`、`node tests/pedalboard.test.mjs`、`node tests/electric-rig.test.mjs`、`node tests/menu.test.mjs`、`node tests/wah.test.mjs`、`node tests/post-fx.test.mjs`、`node tests/chorus.test.mjs`、`node tests/delay.test.mjs`、`node tests/reverb.test.mjs`、`node tests/disc-drag.test.mjs`；本機另有 `node tests/samples.test.mjs`；音色量測 `node tools/tone-lab/measure.mjs`（`--set wah` 量娃娃音，`--set sustain` 量延音）
 - 不可提交：`samples/`（只記檔名、大小、用途和分析出來的數字）、`docs/工作日誌.md`、`.claude/skills/`
 - 敏感字樣：在技能資料夾的 `敏感字樣.txt`（不提交）
 - 推送：公開 repo，每次都先問擁有者
@@ -91,7 +91,7 @@ src/
   core/audio/post-fx/      後段效果匯流排（每個聲部一條，在兩軌加起來之後）：index.js（固定順序合聲→延遲→空間、接線、Node 模型、模組的接口；設計說明 15.1.6）、chorus.js（合聲：LFO 推兩條短延遲；設計說明 15.1.7）、delay.js（延遲：跟脈動的回音、換和弦收舊回音、兩條迴圈換時間不變調；設計說明 15.1.8）、reverb.js（空間：程式產生的 IR、四種大小各一個卷積器、關掉時尾巴自然收；設計說明 15.1.9）
   core/hands/              tracker.js（鏡頭、MediaPipe、鏡像座標）、gestures.js、mouse.js、draw.js
   core/fx/effects.js       粒子、浮動文字、拍點閃光
-  core/pedals/             效果器板（預設顯示）：model.js（資料、預設組、存檔）、gestures.js（捏一下／拖旋鈕）、layout.js、draw.js、pedalboard.js（誰收到手）、audio-binding.js（聲音接口：交給引擎的 applyPedals）、availability.js（哪幾顆能用，其他變暗「即將推出」）、wheel.js（滑鼠模式的滾輪→娃娃音踏板）
+  core/pedals/             效果器板（預設顯示）：model.js（資料、預設組、存檔、每顆大圓盤調的 mainKnob）、gestures.js（捏一下／拖旋鈕和大圓盤）、layout.js、draw.js、pedalboard.js（誰收到手）、audio-binding.js（聲音接口：交給引擎的 applyPedals）、availability.js（哪幾顆能用，其他變暗「即將推出」）、wheel.js（滑鼠模式的滾輪→娃娃音踏板）
   instruments/             instrument.js（介面與登錄表）、air-strings/（空中弦、穿越判定）
   lab/                     音色實驗室（開始畫面或設定面板的按鈕，或 ?lab=1）：lab.js（畫面與排程）、performances.js（固定刷法）、metrics.js（量測定義）、offline-render.js（OfflineAudioContext）
 tools/tone-lab/            model.mjs（引擎的 Node 模型）、measure.mjs（預設組或甲乙丙丁的量測表）、calibrate-level.mjs（重量自動配平的表）
@@ -100,6 +100,7 @@ tests/
   realistic-song.mjs       比較像真實錄音的測試樂團（七和弦、轉位、人聲、搖擺、變速、鼓前奏）
   samples.test.mjs         本機才跑：真實歌曲的拍子是否落在脈動上（讀 samples/*.wav，沒有就跳過）
   pedalboard.test.mjs      效果器板：資料、捏一下／捏住／拖的分辨、旋鈕放開時的值、防連按、腳踏區裡不能拉弦或撥弦
+  disc-drag.test.mjs       大圓盤：捏一下開關不改量、拖動調六顆的主要量（娃娃音手控／自動）不開關、低於門檻的抖動、放開時的跳動、鎖值、防連按、滑鼠和滾輪、關著也能調、和小旋鈕同步
   menu.test.mjs            記住的設定和網址參數的合併（含慣用手）、還沒有聲音的效果器不能開關、用手按按鈕（捏一下、防連按、手在按鈕上不會撥弦或拉弦）
   post-fx.test.mjs         後段效果匯流排：順序、直通完全一樣、設定傳得到而且不重建、速度／換和弦／刷弦通知
   chorus.test.mjs          合聲：旋鈕對應、LFO 延遲範圍和音高偏移上限、平滑、關著時完全一樣、開關不爆音、左右寬度、濕聲的高低通、引擎接線、示範曲的峰值（AIRJAM_SAMPLES 指到 samples 資料夾時再用 s14、s21）
@@ -127,6 +128,7 @@ node tests/post-fx.test.mjs
 node tests/chorus.test.mjs        # 合聲（設計說明 15.1.7）
 node tests/delay.test.mjs         # 延遲（設計說明 15.1.8）
 node tests/reverb.test.mjs        # 空間（設計說明 15.1.9）
+node tests/disc-drag.test.mjs     # 大圓盤調量（設計說明 15.1.2）
 node tools/tone-lab/measure.mjs   # 四個預設組和破音範圍兩端的量測表（--set lab：甲乙丙丁；--set wah：娃娃音；--set sustain：延音；有 samples/s14.wav、s21.wav 就用，沒有用示範曲）
 node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 samples/s14.wav、s21.wav，沒有就跳過）
 ```
@@ -134,7 +136,7 @@ node tests/samples.test.mjs       # 只在本機：真實歌曲的拍子（讀 s
 - `samples.test.mjs` 不解碼 MP3，要先用 ffmpeg 轉成 WAV（轉出來的檔案也在 `samples/` 裡，一樣不能提交）：
   `ffmpeg -i "samples/sample 14.mp3" -ac 2 -ar 44100 samples/s14.wav`（s21 同理）。它檢查一拍是整數個脈動（s21 約 571 ms，s14 375 或 750 ms）、≥ 90% 的拍點落在獨立擬合的脈動格線 ±40 ms 內，並印出 BPM、調性、小節長度和和弦段落。
 
-（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard、electric-rig、menu、wah、post-fx、chorus、delay、reverb 十一組，samples 要另外跑。）
+（需要 Node 18 以上，不用安裝套件；`npm test` 跑 analysis、instrument、tone-lab、pedalboard、electric-rig、menu、wah、post-fx、chorus、delay、reverb、disc-drag 十二組，samples 要另外跑。）
 
 - 歌曲分析（拍點、和弦、調性）要寫成純函式（輸入 `Float32Array` 和 sampleRate），用 `tests/` 裡的 Node 腳本測試。合成的 C–G–Am–F、100 BPM 示範曲應該要分析出正確的結果。改了分析程式就要重跑，並回報數字。
 - 瀏覽器測試用滑鼠模式加內建示範曲：console 沒有錯誤、分析能完成、能拉弦和撥弦、和弦顯示會更新、計分和結束畫面正常。用畫面上的按鈕切換（開始畫面選「滑鼠」、設定面板），不靠網址參數。

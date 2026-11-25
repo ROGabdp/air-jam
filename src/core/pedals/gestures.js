@@ -5,6 +5,10 @@
 //               drag started, pedalKnobTravel palm sizes for the full range; on release the knob
 //               keeps the value it had pedalLatch ms earlier (camera only: the pinch point jumps
 //               as thumb and index separate)
+//               A footswitch (big disc) whose target carries a `knob` drags the same way (its main
+//               amount), with a wider dead band (pedalDiscDeadband) so the drift of a pinch closing
+//               does not eat a toggle; and a camera drag younger than pedalLatch at release (the
+//               pinch point jumping as the fingers open) still counts as a tap, the value restored.
 // A pinch only counts when it starts on a target, from an open hand that has been tracked for a
 // moment: a hand that appears already pinched (rising into view from the bottom edge) never
 // presses anything until it opens again.
@@ -55,9 +59,15 @@ export function classifyPress({ duration, travel, dragged }, settings, palm) {
  *   { type: 'knob', pointerId, target, value }         (while dragging)
  *   { type: 'knobEnd', pointerId, target, value }      (latched final value)
  *   { type: 'release', pointerId, target, kind }       (every press ends with one: 'tap'|'hold'|'drag'|'lost')
- * hitTest(point, pointer) returns a target object or null; a target with kind 'knob' must carry
- * its current normalised value as `value`.
+ * hitTest(point, pointer) returns a target object or null; a target with kind 'knob' (or a
+ * 'switch' with a `knob`: its main amount) must carry its current normalised value as `value`.
+ * A switch press ends in either a tap or a drag, never both.
  */
+// Targets that turn while dragged: knobs, and footswitches that carry a main knob.
+export const isDraggable = target => target?.kind === 'knob' || (target?.kind === 'switch' && !!target.knob);
+const deadbandOf = (target, settings) =>
+  (target.kind === 'switch' ? settings.pedalDiscDeadband ?? settings.pedalDragDeadband : settings.pedalDragDeadband);
+
 export function createPedalGestures(settings) {
   const pointers = new Map();   // id → { firstSeen, wasPinching, ignore, press }
 
@@ -74,8 +84,14 @@ export function createPedalGestures(settings) {
     entry.press = null;
     if (!press) return;
     const duration = time - press.since;
-    const kind = lost ? 'lost' : classifyPress({ duration, travel: press.travel, dragged: press.dragging }, settings, press.palm);
-    if (press.target.kind === 'knob' && press.dragging) {
+    let dragged = press.dragging;
+    // A disc whose drag is only the last pedalLatch ms (camera): the release jump, not a drag. The
+    // latch already gives back the start value; judge the press as if it had not moved.
+    const cutoff = time - settings.pedalLatch / 1000;
+    if (dragged && !lost && press.target.kind === 'switch' && press.source !== 'mouse'
+      && !press.history.some(entry => entry.time <= cutoff)) dragged = false;
+    const kind = lost ? 'lost' : classifyPress({ duration, travel: press.travel, dragged }, settings, press.palm);
+    if (isDraggable(press.target) && press.dragging) {
       events.push({ type: 'knobEnd', pointerId: id, target: press.target, value: latched(press, time, press.source) });
     }
     if (kind === 'tap') events.push({ type: 'tap', pointerId: id, target: press.target });
@@ -122,9 +138,9 @@ export function createPedalGestures(settings) {
 
       press.palm = pointer.palm;
       press.travel = Math.max(press.travel, Math.hypot(pointer.point.x - press.origin.x, pointer.point.y - press.origin.y));
-      if (press.target.kind !== 'knob') continue;
+      if (!isDraggable(press.target)) continue;
       const dy = pointer.point.y - press.ref.y;
-      const band = settings.pedalDragDeadband * pointer.palm;
+      const band = deadbandOf(press.target, settings) * pointer.palm;
       if (!press.dragging && Math.abs(dy) > band) {
         press.dragging = true;
         // Turn from the edge of the dead band: no jump, and a fast first move still counts.

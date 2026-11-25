@@ -3,8 +3,10 @@
 export default {
   'pedal.open': '效果器（P）',
   'pedal.title': '效果器',
-  'pedal.tuningHint': '捏一下＝開關／選擇　捏住上下拖＝轉旋鈕　弦在這個畫面不會動',
-  'pedal.tuningHintMouse': '點一下＝開關／選擇　按住上下拖（或滾輪）＝轉旋鈕　弦在這個畫面不會動',
+  'pedal.tuningHint': '捏一下＝開關／選擇　捏住上下拖＝轉旋鈕、大圓盤　弦不會動',
+  'pedal.tuningHintMouse': '點一下＝開關／選擇　按住上下拖或滾輪＝轉旋鈕、大圓盤　弦不會動',
+  'pedal.discOff': '關著：捏一下才聽得到',
+  'pedal.discOffMouse': '關著：點一下才聽得到',
   'pedal.tuningOnlyReady': '效果器要在開始演奏前調（P）；演奏中可以用下方的腳踏區或 4～9 鍵開關',
   'pedal.done': '完成',
   'pedal.mode.simple': '簡單',
