@@ -246,10 +246,17 @@ export function createApp() {
     return createSongMap(power);
   }
 
+  // The post-effects (delay) follow the song's pulse; told whenever the map is (re)built.
+  function syncTempo() {
+    const a = song?.analysis;
+    audio?.setTempo(a && a.bpm > 0 ? { pulseSeconds: a.pulse, beatSeconds: 60 / a.bpm } : null);
+  }
+
   // Rebuild the map after a tone or guard change and show the chord at the current position.
   function refreshMap() {
     if (!song?.analysis) return;
     song.map = mapFor(song.analysis);
+    syncTempo();
     const heard = state === 'playing' ? Math.max(0, heardTime()) : 0;
     setChord(song.map.chordAt(heard + (state === 'playing' ? settings.chordLookahead / 1000 : 0)));
     hud.setNext(song.map.nextChord(heard));
@@ -295,6 +302,7 @@ export function createApp() {
         return beat.index < 0 ? null : { beats: beat.inBar + beat.phase, beatSeconds: 60 / map.bpm };
       });
       audio.setTone(TONES[settings.tone]);
+      syncTempo();
       pitch.setVoicing(voicingNow());
     }
     audio.resume().catch(error => console.warn('[Air Jam] audio resume failed:', error));
@@ -358,6 +366,7 @@ export function createApp() {
       }
     }
     song = { title, buffer, analysis, map: mapFor(analysis) };
+    syncTempo();
     instrument.reset();
     fx.clear();
     enterReady();
@@ -400,6 +409,7 @@ export function createApp() {
     }
     song.analysis = analysis;
     song.map = mapFor(analysis);
+    syncTempo();
     const heard = state === 'playing' ? Math.max(0, heardTime()) : 0;
     lastBeat = state === 'playing' ? song.map.beatIndexAt(heard) : -1;
     clickedBeat = state === 'playing' ? song.map.beatIndexAt(audio.songTime()) : -1;

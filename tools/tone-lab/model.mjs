@@ -1,7 +1,8 @@
 // Node model of what src/core/audio/engine.js plays, for measurements without a browser:
 // voices (Karplus buffers, voice gains, per-string pan, chokes, the voice limit, strum choke,
 // double-tracking) → part bus → the tone's stages (stages.js) → trim, then optionally the master
-// bus (string gain → glue compressor, song gain, limiter, ceiling).
+// bus (string gain → glue compressor, song gain, limiter, ceiling). With `post` the part also runs
+// the post-effects bus (chorus → delay → reverb, post-fx/index.js processPostFx).
 //
 // Exact: Karplus buffers, voice parameters, release envelopes, biquads (Web Audio formulas),
 // waveshaper curves, stereo panner law. Approximate: the waveshaper runs without 4× oversampling,
@@ -12,6 +13,7 @@ import { renderPluck } from '../../src/core/audio/karplus.js';
 import { releaseTimeConstant, ceilingCurve, shapeSample } from '../../src/core/audio/distortion.js';
 import { processStages } from '../../src/core/audio/stages.js';
 import { voiceParams } from '../../src/core/audio/voice-params.js';
+import { processPostFx } from '../../src/core/audio/post-fx/index.js';
 
 export function seeded(seed) {
   let a = seed >>> 0;
@@ -44,9 +46,11 @@ const panGains = pan => {
  * @param {number} [o.seed]
  * @param {number} [o.trim]
  * @param {number|Float32Array} [o.wah]  wah position: fixed, or a per-sample track (wah.js simulateParam)
+ * @param {object} [o.post]   post-effects params (postFxParams(snapshot)); null = no post bus (bypass)
+ * @param {{ pulseSeconds, beatSeconds }} [o.tempo]  for the post-effects (delay sync)
  * @returns {{ sampleRate: number, left: Float32Array, right: Float32Array }}
  */
-export function renderPart(tone, events, { duration, chokes = [], sampleRate = 48000, settings, seed = 1, trim = 1, wah = 0.5 }) {
+export function renderPart(tone, events, { duration, chokes = [], sampleRate = 48000, settings, seed = 1, trim = 1, wah = 0.5, post = null, tempo = null }) {
   const length = Math.round(duration * sampleRate);
   const random = seeded(seed);
   const double = !!tone.double;
@@ -136,6 +140,17 @@ export function renderPart(tone, events, { duration, chokes = [], sampleRate = 4
     const l = processStages(tone.stages, mainL, sampleRate, { wah });
     const r = processStages(tone.stages, mainR, sampleRate, { wah });
     for (let i = 0; i < length; i++) { left[i] = l[i] * trim; right[i] = r[i] * trim; }
+  }
+  if (post) {
+    // Same moments the engine calls onChordChange / onStrum.
+    const chordChanges = chokes.filter(c => c.keep).map(c => c.time);
+    const strums = [];
+    let last = -Infinity;
+    for (const e of [...events].sort((a, b) => a.time - b.time)) {
+      if (e.time - last > settings.strumWindow / 1000) strums.push(e.time);
+      last = Math.max(last, e.time);
+    }
+    return { sampleRate, ...processPostFx(post, { left, right }, { sampleRate, tempo, chordChanges, strums }) };
   }
   return { sampleRate, left, right };
 }

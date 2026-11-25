@@ -6,6 +6,7 @@ import { releaseTimeConstant, ceilingCurve } from './distortion.js';
 import { voiceParams, t60For } from './voice-params.js';
 import { rigFromSnapshot, electricTone } from './electric-rig.js';
 import { createWahControl } from './wah.js';
+import { createPostFxBus, postFxParams } from './post-fx/index.js';
 
 // Live contexts render only the first part of a pluck when it is played and the rest a moment later,
 // in small slices between frames (most of a long note is never heard: the next strum chokes it).
@@ -23,20 +24,25 @@ const pitchClassOf = freq => ((Math.round(69 + 12 * Math.log2(freq / 440)) % 12)
  * @param {BaseAudioContext} [o.context]  e.g. an OfflineAudioContext for measurements
  * @param {boolean} [o.master]  false: strings and song go straight to the output, without the glue
  *                              compressor, limiter and ceiling (to measure a tone chain on its own)
+ * @param {object} [o.postFx]   post-effects modules { chorus, delay, reverb } (default post-fx/index.js; tests)
  */
-export function createAudioEngine(settings, { context = null, master = true, streaming = context === null } = {}) {
+export function createAudioEngine(settings, { context = null, master = true, streaming = context === null, postFx = undefined } = {}) {
   const ctx = context ?? new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
   // Electric rig settings from the pedalboard (null: no pedalboard, the rig is 丁 = 搖滾).
   let pedalSnapshot = null;
   // Song beat position for the wah's 跟拍子 sweep: (songSeconds) => { beats, beatSeconds } | null.
   let wahClock = null;
+  // Song tempo for the post-effects (delay sync): { pulseSeconds, beatSeconds } | null.
+  let tempo = null;
 
-  // song ────────────────────────────────────────────────────► songGain ─┐
-  // voices ► part bus ► part's tone chain ► trim ─┐                       │
-  //   (one part per role: 'rhythm' now,           ├► stringGain ► glue ──┴► limiter ► ceiling ► destination
-  //    a 'lead' part later; the tone lab adds    ─┘
+  // song ──────────────────────────────────────────────────────────────────► songGain ─┐
+  // voices ► part bus ► part's tone chain ► trim ► post-fx ─┐                             │
+  //   (one part per role: 'rhythm' now,                     ├► stringGain ► glue ─────────┴► limiter ► ceiling ► destination
+  //    a 'lead' part later; the tone lab adds              ─┘
   //    one part per combo)
   // A tone with `double` gets a second bus and chain in its part (double-tracking), panned apart.
+  // post-fx (post-fx/index.js): chorus → delay → reverb, once per part after both takes; it is not
+  // rebuilt by setTone. Only rig parts get the pedals' settings; other tones keep it bypassed.
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -2; limiter.knee.value = 0; limiter.ratio.value = 20;
   limiter.attack.value = 0.002; limiter.release.value = 0.12;
@@ -72,9 +78,12 @@ export function createAudioEngine(settings, { context = null, master = true, str
       const bus = ctx.createGain();
       bus.gain.value = 0.3;
       const trim = ctx.createGain();
-      trim.connect(stringGain);
-      p = { name, bus, trim, tone: null, chain: null, panner: null, double: null, lastPluckWhen: -Infinity, wah: null };
+      const post = createPostFxBus(ctx, { part: name, modules: postFx });
+      trim.connect(post.input);
+      post.output.connect(stringGain);
+      p = { name, bus, trim, post, tone: null, chain: null, panner: null, double: null, lastPluckWhen: -Infinity, wah: null };
       parts.set(name, p);
+      if (tempo) post.setTempo(tempo, { now: ctx.currentTime });
     }
     return p;
   }
@@ -156,6 +165,8 @@ export function createAudioEngine(settings, { context = null, master = true, str
 
   // The electric rig's tone for the current pedal settings (other tones are used as they are).
   const resolveTone = tone => (tone?.rig ? electricTone(rigFromSnapshot(pedalSnapshot)) : tone);
+  // Post-effects settings of a part: the pedalboard's for rig parts, all off for other tones.
+  const postParamsFor = (p, params = postFxParams(pedalSnapshot, postFx)) => (p.tone?.rig ? params : postFxParams(null, postFx));
 
   // ---------- wah position ----------
   // One position signal per rig part (a ConstantSourceNode both takes' wah stages read, wah.js);
@@ -199,6 +210,7 @@ export function createAudioEngine(settings, { context = null, master = true, str
       p.double = null;
     }
     p.tone = next;
+    p.post.apply(postParamsFor(p), { type: 'tone' }, { now: ctx.currentTime, tau: PEDAL_TAU.toggle });
     const controls = next.rig ? { wah: partWah(p).source } : undefined;
     if (next.rig) automateWah(p, p.wah.control.configure(rigFromSnapshot(pedalSnapshot).wah, ctx.currentTime));
     p.chain = next.createChain(ctx, controls);
@@ -235,7 +247,9 @@ export function createAudioEngine(settings, { context = null, master = true, str
     const key = JSON.stringify(tone.stages);
     // Knobs glide on the audible copy; anything that switches a pedal cross-fades to the other copy.
     const glide = change?.type === 'param';
+    const post = postFxParams(pedalSnapshot, postFx);
     for (const p of parts.values()) {
+      p.post.apply(postParamsFor(p, post), change ?? { type: 'load' }, { now: ctx.currentTime, tau: glide ? PEDAL_TAU.knob : PEDAL_TAU.toggle });
       if (!p.tone?.rig) continue;
       automateWah(p, partWah(p).control.configure(rig.wah, ctx.currentTime));
       // Voice-side settings (the 延音 knob) take effect from the next pluck; the chains only move
@@ -250,6 +264,17 @@ export function createAudioEngine(settings, { context = null, master = true, str
       p.rigKey = key;
     }
     return rig;
+  }
+
+  /**
+   * Song tempo for the post-effects (the delay follows the pulse). The game calls it whenever the
+   * song map is (re)built: song load, tone / key-guard change, manual tempo correction; null = no song.
+   * @param {{ pulseSeconds: number, beatSeconds: number } | null} next
+   */
+  function setTempo(next) {
+    tempo = next && next.pulseSeconds > 0 && next.beatSeconds > 0
+      ? { pulseSeconds: next.pulseSeconds, beatSeconds: next.beatSeconds } : null;
+    for (const p of parts.values()) p.post.setTempo(tempo, { now: ctx.currentTime });
   }
 
   /**
@@ -298,6 +323,8 @@ export function createAudioEngine(settings, { context = null, master = true, str
    * @returns {number} voices choked
    */
   function chokeChord(keep, { part: partName = 'rhythm', when = ctx.currentTime } = {}) {
+    // Every tone: the post-effects hear about the change (the delay ducks old-chord echoes).
+    parts.get(partName)?.post.onChordChange(when);
     const seconds = parts.get(partName)?.tone?.chordChoke;
     if (!seconds) return 0;
     let count = 0;
@@ -347,7 +374,9 @@ export function createAudioEngine(settings, { context = null, master = true, str
 
     // Strum choke (only tones that ask for it): a new strum, i.e. a pluck more than strumWindow
     // after the part's previous one, fades whatever is still ringing, as re-strumming a guitar does.
-    if (tone.strumChoke && when - p.lastPluckWhen > settings.strumWindow / 1000) {
+    const newStrum = when - p.lastPluckWhen > settings.strumWindow / 1000;
+    if (newStrum) p.post.onStrum(when, velocity);
+    if (tone.strumChoke && newStrum) {
       for (const other of voices) {
         if (other.part === partName && !other.released && other.when < when) release(other, tone.strumChoke, when);
       }
@@ -445,6 +474,10 @@ export function createAudioEngine(settings, { context = null, master = true, str
     ctx,
     setTone,
     applyPedals,
+    setTempo,
+    get tempo() { return tempo; },
+    // A part's post-effects bus (console and tests).
+    postFx: (partName = 'rhythm') => parts.get(partName)?.post ?? null,
     get tone() { return parts.get('rhythm')?.tone ?? null; },
     // Electric rig numbers for the current pedal settings (for the console and measurements).
     get rig() { return rigFromSnapshot(pedalSnapshot); },
