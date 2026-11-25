@@ -7,7 +7,7 @@ export const PEDAL_AVAILABLE = {
   distortion: true,
   chorus: false,
   delay: false,
-  reverb: false,
+  reverb: true,
 };
 
 export const isPedalAvailable = id => PEDAL_AVAILABLE[id] === true;

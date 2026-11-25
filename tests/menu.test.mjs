@@ -131,13 +131,13 @@ function boardRig(options = {}) {
   return { board, toasts, frame, wait, click, drag, find };
 }
 
-test('availability: wah, overdrive and distortion are usable; the others wait for their sound', () => {
-  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive', 'wah']);
+test('availability: wah, overdrive, distortion and reverb are usable; the others wait for their sound', () => {
+  assert.deepEqual(Object.keys(PEDAL_AVAILABLE).filter(isPedalAvailable).sort(), ['distortion', 'overdrive', 'reverb', 'wah']);
 });
 
 test('availability: a dimmed pedal cannot be switched or turned; it says "coming soon"', () => {
-  const { board, toasts, click, drag, find } = boardRig();
-  const reverbOn = board.model.isOn('reverb');      // on in the default preset
+  const { board, toasts, click, drag, find } = boardRig({ isAvailable: id => id !== 'reverb' });   // reverb dimmed for this test
+  const reverbOn = board.model.isOn('reverb');
   const reverb = find(t => t.kind === 'switch' && t.pedal === 'reverb');
   click({ x: reverb.cx, y: reverb.cy });
   assert.equal(board.model.isOn('reverb'), reverbOn, 'reverb switch locked');

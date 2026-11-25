@@ -96,7 +96,7 @@ test('model: clamping, steps and physical values', () => {
   assert.ok(close(knobValue(knobOf('overdrive', 'drive'), 0.5), 24));
   assert.ok(close(knobValue(knobOf('chorus', 'rate'), 0), 0.1) && close(knobValue(knobOf('chorus', 'rate'), 1), 3));
   assert.ok(close(knobValue(knobOf('chorus', 'rate'), 0.5), Math.sqrt(0.3)), 'log curve: geometric middle');
-  assert.equal(knobValue(knobOf('reverb', 'size'), 0.9), 2);
+  assert.equal(knobValue(knobOf('reverb', 'size'), 0.9), 3, 'four sizes');
 });
 
 test('model: serialise → JSON → deserialise round trip, and garbage gives a valid board', () => {

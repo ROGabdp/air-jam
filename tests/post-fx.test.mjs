@@ -73,34 +73,33 @@ test('order: chorus → delay → reverb, slot n output = slot n+1 input', () =>
   assert.equal(bus.slots.at(-1).output, bus.output);
 });
 
-test('bypass: one path of unity gains, no automation, nothing else (bit-exact)', () => {
+test('bypass: every slot keeps input → output at unity; anything else into an output is a gain at exactly 0', () => {
   const ctx = new FakeAudioContext();
   const bus = createPostFxBus(ctx);
-  bus.apply(postFxParams(soundingSnapshot()), { type: 'load' });   // stubs ignore even "on"
+  bus.apply(postFxParams(soundingSnapshot({})), { type: 'load' });   // sounding pedals, all off
   bus.setTempo({ pulseSeconds: 0.286, beatSeconds: 0.571 });
   bus.onChordChange(1); bus.onStrum(1, 0.8);
-  let node = bus.input;
-  const path = [node];
-  while (node !== bus.output) {
-    assert.equal(node.outputs.size, 1, 'single path');
-    node = [...node.outputs][0];
-    path.push(node);
+  for (const slot of bus.slots) {
+    assert.ok(slot.input.outputs.has(slot.output), `${slot.id}: dry path`);
+    for (const n of [slot.input, slot.output]) {
+      assert.equal(n.gain.value, 1);
+      assert.equal(paramCalls(n).length, 0, 'no automation on the dry path');
+    }
+    const into = ctx.created.filter(n => n !== slot.input && n.outputs.has(slot.output));
+    for (const n of into) {
+      assert.equal(n.kind, 'gain', `${slot.id}: wet return is a gain`);
+      assert.equal(n.gain.value, 0, `${slot.id}: wet return closed`);
+      assert.equal(paramCalls(n).length, 0, `${slot.id}: wet return not automated while off`);
+    }
   }
-  assert.equal(path.length, 4, 'input + three slot outputs');
-  for (const n of path) {
-    assert.equal(n.kind, 'gain');
-    assert.equal(n.gain.value, 1);
-    assert.equal(paramCalls(n).length, 0, 'no automation');
-  }
-  assert.equal(ctx.created.filter(n => n !== ctx.destination).length, 4, 'the bus made no other nodes');
   bus.dispose();
   assert.equal(bus.input.outputs.size, 0);
 });
 
-test('bypass (Node model): processPostFx and renderPart with post are sample-exact', () => {
+test('bypass (Node model): processPostFx and renderPart with post are sample-exact when off', () => {
   const left = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i / 7) * 0.7);
   const right = Float32Array.from(left, x => -x * 0.5);
-  const out = processPostFx(postFxParams(soundingSnapshot()), { left, right }, { sampleRate: 48000 });
+  const out = processPostFx(postFxParams(soundingSnapshot({})), { left, right }, { sampleRate: 48000 });
   assert.deepEqual(out.left, left); assert.deepEqual(out.right, right);
   const events = [0, 0.01, 0.02, 0.5].map((time, i) => ({ time, freq: 110 * (i + 1), velocity: 0.7 }));
   const tone = TONES.electric;
@@ -114,7 +113,9 @@ test('paramsFromSnapshot: off without snapshot, for pedals without sound, and wh
   for (const id of POST_FX_ORDER) {
     const read = POST_FX_MODULES[id].paramsFromSnapshot;
     assert.equal(read(null).on, false);
-    assert.equal(read(createPedalModel().snapshot()).on, false, 'no sound yet');
+    const silent = createPedalModel().snapshot();
+    silent.pedals[id].on = true; silent.pedals[id].sound = false;
+    assert.equal(read(silent).on, false, 'no sound');
     assert.equal(read(soundingSnapshot({})).on, false);
     const on = read(soundingSnapshot());
     assert.equal(on.on, true);
